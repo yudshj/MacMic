@@ -53,7 +53,13 @@ public final class AppViewModel: ObservableObject {
     @Published public var selectedADBSerial: String = "" {
         didSet { UserDefaults.standard.set(selectedADBSerial, forKey: "macmic_adb_serial") }
     }
-    @Published public var selectedDevice: AudioDevice?
+    @Published public var selectedDevice: AudioDevice? {
+        didSet {
+            guard let uid = selectedDevice?.uid else { return }
+            UserDefaults.standard.set(uid, forKey: "macmic_output_uid")
+            audioEngine.currentDevice = selectedDevice
+        }
+    }
     @Published public var availableDevices: [AudioDevice] = []
     
     @Published public var gainValue: Double {
@@ -189,9 +195,16 @@ public final class AppViewModel: ObservableObject {
         UserDefaults.standard.set(self.ipHistory, forKey: "macmic_ip_history")
     }
 
+    /// Re-enumerates output devices, keeping the current selection (or the last one used, by UID)
+    /// when it is still attached; only falls back to auto-detect (prefers BlackHole) if it is gone.
     public func refreshDevices() {
         self.availableDevices = AudioDeviceManager.getOutputDevices()
-        if let def = AudioDeviceManager.getDefaultDevice() {
+        let savedUID = UserDefaults.standard.string(forKey: "macmic_output_uid") ?? ""
+        let wanted = selectedDevice?.uid.isEmpty == false ? selectedDevice!.uid : savedUID
+        if let kept = availableDevices.first(where: { $0.uid == wanted }) {
+            if selectedDevice?.id != kept.id { selectedDevice = kept }
+            audioEngine.currentDevice = kept
+        } else if let def = AudioDeviceManager.getDefaultDevice() {
             self.selectedDevice = def
             self.audioEngine.currentDevice = def
         }
