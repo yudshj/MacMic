@@ -12,7 +12,7 @@ Language: **English** | [简体中文](README_ZH.md)
 
 > **Disclaimer & Note to WO Mic Developers**  
 > 1. **Unofficial Port**: This project is an independent open-source port and has no affiliation, sponsorship, or endorsement from Wolicheng Tech. **Please DO NOT ask the developers of WO Mic for help regarding this unofficial port.**  
-> 2. **To Developers of WO Mic**: We deeply appreciate Wolicheng Tech's work on WO Mic. This software is created solely for macOS interoperability research and personal convenience. If Wolicheng Tech does not approve of this port or has any concerns, please contact `noonyufei@gmail.com`. The repository will be immediately taken down upon request.  
+> 2. **To Developers of WO Mic**: We deeply appreciate Wolicheng Tech's work on WO Mic. This software is created solely for macOS interoperability research and personal convenience. If Wolicheng Tech does not approve of this port or has any concerns, please contact `maghsk2017@gmail.com`. The repository will be immediately taken down upon request.  
 > 3. **Trademarks**: All trademarks, brand names, and protocol copyrights related to WO Mic belong to Wolicheng Tech.
 
 
@@ -28,14 +28,20 @@ MacMic directly implements low-level network communication and CoreAudio pipelin
 
 ## Features
 
-- **Three Connection Modes**:
+- **Real-time AI Noise Suppression** (three modes):
+  - **Off**: pure bypass, zero latency and zero extra cost.
+  - **RNNoise** (default): xiph's open model, ~20 ms extra latency, ~2% of one CPU core.
+  - **Apple Voice Isolation**: the system `AUSoundIsolation` unit FaceTime uses; stronger, ~56 ms extra latency, no extra install size.
+  - A strength slider mixes the denoised signal with the original; the dry path is delayed to the same length, so there is no comb filtering.
+  - All denoising runs on the audio worker thread, never on the real-time render thread.
+- **Three Connection Modes** (USB first / default):
+  - **USB (ADB)**: Plug in an Android phone; port forwarding is automatic and you can pick among multiple attached devices.
   - **Wi-Fi**: Wireless connection over local network (supports iOS & Android).
-  - **USB (ADB)**: Plug in Android phone for automatic ADB port forwarding with ultra-low latency.
   - **Wi-Fi Direct**: Direct hotspot connection.
 - **Audio Routing & Processing**:
   - Auto-detects and outputs audio into **BlackHole 2ch** virtual microphone.
-  - Real-time logarithmic dB VU meter.
-  - 0% to 300% gain adjustment and one-click mute.
+  - Smooth level bar with a -60 to 0 dBFS scale and a peak marker.
+  - 0% to 200% gain adjustment and one-click mute.
 - **Internationalization (9 Languages Supported)** 🌐:
   - Full native i18n support with instant dynamic switching:
     - 🇨🇳 **简体中文** (Simplified Chinese)
@@ -107,6 +113,16 @@ Or download the installer from the [BlackHole Website](https://existential.audio
 
 ---
 
+## Noise Suppression Tips
+
+- **Default to RNNoise**: lowest latency and CPU; right for everyday calls and meetings.
+- **Pick Apple Voice Isolation** when you need stronger suppression, e.g. a noisy cafe or loud keyboard. It costs ~56 ms extra latency, which is negligible for voice chat.
+- **Strength slider**: 100% is full denoise. Drop to 60–80% if voices sound muffled or over-processed.
+- **Don't stack denoisers**: with MacMic denoising on, set the built-in noise suppression in Zoom / Teams / WeChat to low or off. Two denoisers in series tend to sound "underwater" and clip word endings.
+- **Try the phone-side source mode first**: WO Mic exposes several input modes on the phone; mode 3 is documented as suited to noisy environments.
+
+---
+
 ## Building from Source
 
 ### Prerequisites
@@ -114,9 +130,11 @@ Or download the installer from the [BlackHole Website](https://existential.audio
 - Xcode Command Line Tools (`xcode-select --install`)
 - libopus (`brew install opus`)
 
+> RNNoise needs no manual install: on the first `build_app.sh` run, `scripts/build_rnnoise.sh` fetches the pinned xiph/rnnoise revision plus its model weights (sha256-verified) and statically compiles `third_party/rnnoise/lib/librnnoise.a`.
+
 ### Build Command
 ```bash
-git clone https://github.com/luanyufei/MacMic.git
+git clone https://github.com/yudshj/MacMic.git
 cd MacMic
 ./build_app.sh
 ```
@@ -132,7 +150,8 @@ swift-src/
 ├── ContentView.swift          # SwiftUI interface & VU meter rendering
 ├── ViewModel.swift            # State management & event dispatching
 ├── MacMicClient.swift         # Communication protocol implementation
-├── AudioEngine.swift          # CoreAudio / AudioQueue output engine
+├── AudioEngine.swift          # CoreAudio / AudioQueue output, ring buffer, level meter
+├── Denoiser.swift             # Real-time denoise: RNNoise / Apple Voice Isolation / bypass
 ├── OpusDecoder.swift          # C libopus decoding wrapper
 ├── AudioDeviceManager.swift   # macOS audio device enumeration
 ├── ADBHelper.swift            # Android USB ADB port forwarding helper
@@ -147,3 +166,16 @@ swift-src/
 ## License
 
 Distributed under the [MIT License](LICENSE).
+
+## Acknowledgements
+
+- Built on [luanyufei/MacMic](https://github.com/luanyufei/MacMic) (MIT); thanks to the original author for the foundational work.
+- [xiph/rnnoise](https://github.com/xiph/rnnoise) — BSD-3-Clause noise suppression model.
+- [ExistentialAudio/BlackHole](https://github.com/ExistentialAudio/BlackHole) — virtual audio driver.
+- WO Mic trademarks and protocol rights belong to Wolicheng Tech.
+
+## Maintainer
+
+- GitHub: [@yudshj](https://github.com/yudshj)
+- Project: [github.com/yudshj/MacMic](https://github.com/yudshj/MacMic)
+- Email: `maghsk2017@gmail.com`
