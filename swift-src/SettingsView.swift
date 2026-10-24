@@ -164,6 +164,14 @@ public struct SettingsView: View {
         Divider().padding(.leading, 44)
     }
 
+    /// Read straight from Info.plist so the about panel can never drift from the bundle version.
+    private static var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "1.0.1"
+        guard let build = info?["CFBundleVersion"] as? String, build != short else { return short }
+        return "\(short) (\(build))"
+    }
+
     // MARK: - Display Section
     private var displaySection: some View {
         VStack(spacing: 0) {
@@ -233,7 +241,7 @@ public struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("MacMic")
                         .font(.system(size: 16, weight: .semibold))
-                    Text("\(l10n.t("about_version")) 1.0.0 · Apple Silicon")
+                    Text("\(l10n.t("about_version")) \(Self.appVersion) · Apple Silicon")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
