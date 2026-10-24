@@ -137,11 +137,11 @@ Reopening from "Open Panel" in the menu bar takes about 0.1 s, with all state pr
 
 | Denoise mode | CPU (share of one core) | Extra latency |
 | --- | --- | --- |
-| Off | 0.7% | 0 |
-| RNNoise | 5.9% | ~20 ms |
-| Apple Voice Isolation | 4.3% | ~56 ms |
+| Off | ~1-4% | 0 |
+| RNNoise | ~6-7% | ~20 ms |
+| Apple Voice Isolation | ~5-7% | ~56 ms |
 
-> Figures include the whole pipeline (receive, Opus decode, denoise, meter, AUHAL output). Hiding the window changes nothing measurable, so the UI itself costs almost no CPU.
+> Figures include the whole pipeline (receive, Opus decode, denoise, meter, AUHAL output) and fluctuate with audio content and window state. The two denoisers are within ~1 point of each other, so pick by latency requirement.
 - **Strength slider**: 100% is full denoise. Drop to 60–80% if voices sound muffled or over-processed.
 - **Don't stack denoisers**: with MacMic denoising on, set the built-in noise suppression in Zoom / Teams / WeChat to low or off. Two denoisers in series tend to sound "underwater" and clip word endings.
 - **Try the phone-side source mode first**: WO Mic exposes several input modes on the phone; mode 3 is documented as suited to noisy environments.
