@@ -128,7 +128,9 @@ public final class AppViewModel: ObservableObject {
         self.selectedTransport = TransportMode(rawValue: UserDefaults.standard.string(forKey: "macmic_transport") ?? "") ?? .usb
         let defaults = UserDefaults.standard
         self.denoiseEnabled = defaults.object(forKey: "macmic_denoise_enabled") as? Bool ?? true
-        self.denoiseMode = DenoiseMode(rawValue: defaults.string(forKey: "macmic_denoise_mode") ?? "") ?? .rnnoise
+        // Apple Voice Isolation measured both stronger and cheaper than RNNoise; RNNoise stays
+        // available (and becomes the default when AUSoundIsolation is unavailable, macOS < 13).
+        self.denoiseMode = DenoiseMode(rawValue: defaults.string(forKey: "macmic_denoise_mode") ?? "") ?? .appleVoiceIsolation
         self.denoiseStrength = defaults.object(forKey: "macmic_denoise_strength") as? Double ?? 100.0
         self.selectedADBSerial = UserDefaults.standard.string(forKey: "macmic_adb_serial") ?? ""
         self.ipHistory = savedHistory

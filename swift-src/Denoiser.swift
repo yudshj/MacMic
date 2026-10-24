@@ -5,9 +5,10 @@ import CRNNoise
 // MARK: - Public configuration
 
 public enum DenoiseMode: String, CaseIterable, Identifiable {
-    /// xiph RNNoise (BSD-3, "little" model): 20 ms latency, ~2% of one core.
+    /// xiph RNNoise (BSD-3, "little" model): 20 ms latency, measured ~5-6% of one core in-app.
     case rnnoise
     /// Apple's AUSoundIsolation (FaceTime "Voice Isolation"): ~56 ms latency, runs via CoreML.
+    /// Default: measured stronger and cheaper (~4% of one core) than RNNoise.
     case appleVoiceIsolation
 
     public var id: String { rawValue }
