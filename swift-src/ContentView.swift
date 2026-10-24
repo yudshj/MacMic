@@ -58,6 +58,8 @@ struct FullWidthSegmentedPicker<Selection: Equatable>: NSViewRepresentable {
     let options: [Selection]
     let titles: [String]
     var enabled: Bool = true
+    /// Options whose segment is shown but cannot be selected (e.g. unavailable on this OS).
+    var disabledOptions: [Selection] = []
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -80,6 +82,12 @@ struct FullWidthSegmentedPicker<Selection: Equatable>: NSViewRepresentable {
         let selected = options.firstIndex(of: selection) ?? -1
         if control.selectedSegment != selected { control.selectedSegment = selected }
         if control.isEnabled != enabled { control.isEnabled = enabled }
+        for (index, option) in options.enumerated() {
+            let segmentEnabled = !disabledOptions.contains(option)
+            if control.isEnabled(forSegment: index) != segmentEnabled {
+                control.setEnabled(segmentEnabled, forSegment: index)
+            }
+        }
     }
 
     final class Coordinator: NSObject {
@@ -89,6 +97,19 @@ struct FullWidthSegmentedPicker<Selection: Equatable>: NSViewRepresentable {
         @objc func select(_ sender: NSSegmentedControl) {
             guard parent.options.indices.contains(sender.selectedSegment) else { return }
             parent.selection = parent.options[sender.selectedSegment]
+        }
+    }
+}
+
+/// Presentational three-way denoise choice; maps onto `denoiseEnabled` + `denoiseMode`.
+enum DenoiseChoice: CaseIterable, Equatable {
+    case off, rnnoise, apple
+
+    func title(using l10n: LocalizationManager) -> String {
+        switch self {
+        case .off: return l10n.t("denoise_choice_off")
+        case .rnnoise: return l10n.t("denoise_choice_rnnoise")
+        case .apple: return l10n.t("denoise_choice_apple")
         }
     }
 }
@@ -618,28 +639,44 @@ public struct ContentView: View {
 
     // MARK: Denoise
 
+    /// Single three-way view of the (enabled, mode) pair stored in the view model.
+    private var denoiseChoice: Binding<DenoiseChoice> {
+        Binding(
+            get: {
+                guard vm.denoiseEnabled else { return .off }
+                return vm.denoiseMode == .rnnoise ? .rnnoise : .apple
+            },
+            set: { choice in
+                // Set the mode before enabling so the pushed config never briefly
+                // runs the previous engine; skip no-op writes to avoid redundant pushes.
+                switch choice {
+                case .off:
+                    if vm.denoiseEnabled { vm.denoiseEnabled = false }
+                case .rnnoise, .apple:
+                    let mode: DenoiseMode = choice == .rnnoise ? .rnnoise : .appleVoiceIsolation
+                    if vm.denoiseMode != mode { vm.denoiseMode = mode }
+                    if !vm.denoiseEnabled { vm.denoiseEnabled = true }
+                }
+            }
+        )
+    }
+
     private var denoiseCard: some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                SectionCaption(title: l10n.t("denoise_header"), systemImage: "waveform.badge.minus")
-                Spacer()
-                Toggle("", isOn: $vm.denoiseEnabled)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .accessibilityLabel(Text(l10n.t("denoise_header")))
-            }
+            SectionCaption(title: l10n.t("denoise_header"), systemImage: "waveform.badge.minus")
 
+            FullWidthSegmentedPicker(
+                selection: denoiseChoice,
+                options: DenoiseChoice.allCases,
+                titles: DenoiseChoice.allCases.map { $0.title(using: l10n) },
+                disabledOptions: vm.isAppleVoiceIsolationAvailable ? [] : [.apple]
+            )
+            .frame(height: 24)
+            .help(vm.isAppleVoiceIsolationAvailable ? "" : l10n.t("denoise_apple_unavailable"))
+            .accessibilityLabel(Text(l10n.t("denoise_header")))
+
+            // Always laid out (only dimmed when off) so the card height never changes.
             VStack(alignment: .leading, spacing: 9) {
-                FullWidthSegmentedPicker(
-                    selection: $vm.denoiseMode,
-                    options: [.rnnoise, .appleVoiceIsolation],
-                    titles: [l10n.t("denoise_mode_rnnoise"), l10n.t("denoise_mode_apple")],
-                    enabled: vm.denoiseEnabled && vm.isAppleVoiceIsolationAvailable
-                )
-                .frame(height: 24)
-                .help(vm.isAppleVoiceIsolationAvailable ? "" : l10n.t("denoise_apple_unavailable"))
-
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text(l10n.t("denoise_strength"))
@@ -656,19 +693,21 @@ public struct ContentView: View {
 
                 HStack(spacing: 5) {
                     Image(systemName: "clock")
-                    Text(vm.denoiseMode == .rnnoise ? l10n.t("denoise_info_rnnoise") : l10n.t("denoise_info_apple"))
+                    Text(!vm.denoiseEnabled
+                         ? l10n.t("denoise_info_off")
+                         : (vm.denoiseMode == .rnnoise ? l10n.t("denoise_info_rnnoise") : l10n.t("denoise_info_apple")))
                 }
                 .font(.system(size: 10.5))
                 .foregroundColor(.secondary)
-
-                Label(l10n.t("denoise_stack_hint_short"), systemImage: "info.circle")
-                    .font(.system(size: 10.5))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .help(l10n.t("denoise_stack_hint"))
             }
             .disabled(!vm.denoiseEnabled)
-            .opacity(vm.denoiseEnabled ? 1 : 0.5)
+            .opacity(vm.denoiseEnabled ? 1 : 0.45)
+
+            Label(l10n.t("denoise_stack_hint_short"), systemImage: "info.circle")
+                .font(.system(size: 10.5))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .help(l10n.t("denoise_stack_hint"))
         }
         .macMicCard()
     }

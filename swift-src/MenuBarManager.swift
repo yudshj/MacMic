@@ -14,64 +14,35 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
     private var openPanelMenuItem: NSMenuItem!
     private var settingsMenuItem: NSMenuItem!
     private var quitMenuItem: NSMenuItem!
+    private var currentStatusSymbol: String?
 
     override private init() {
         super.init()
     }
 
-    public static func makeMacMicIcon(connected: Bool) -> NSImage {
-        let size = NSSize(width: 18, height: 18)
-        let img = NSImage(size: size, flipped: false) { rect in
-            let color: NSColor
-            if connected {
-                color = NSColor(srgbRed: 0.20, green: 0.82, blue: 0.38, alpha: 1.0)
-            } else {
-                color = NSColor.black
-            }
-
-            color.setFill()
-            color.setStroke()
-
-            // 1. Mic Capsule
-            let capsuleRect = NSRect(x: 6.9, y: 7.0, width: 4.2, height: 7.5)
-            let capsule = NSBezierPath(roundedRect: capsuleRect, xRadius: 2.1, yRadius: 2.1)
-            capsule.fill()
-
-            // 2. Mic Stand Arc
-            let standArc = NSBezierPath()
-            standArc.lineWidth = 1.35
-            standArc.lineCapStyle = .round
-            standArc.appendArc(withCenter: NSPoint(x: 9.0, y: 9.8), radius: 3.6, startAngle: 180, endAngle: 0, clockwise: true)
-            standArc.stroke()
-
-            // 3. Pole & Base
-            let pole = NSBezierPath()
-            pole.lineWidth = 1.35
-            pole.lineCapStyle = .round
-            pole.move(to: NSPoint(x: 9.0, y: 6.2))
-            pole.line(to: NSPoint(x: 9.0, y: 3.0))
-            pole.move(to: NSPoint(x: 6.0, y: 3.0))
-            pole.line(to: NSPoint(x: 12.0, y: 3.0))
-            pole.stroke()
-
-            // 4. Outer Sound Waves (distinctive to MacMic AppIcon)
-            let waveLeft = NSBezierPath()
-            waveLeft.lineWidth = 1.35
-            waveLeft.lineCapStyle = .round
-            waveLeft.appendArc(withCenter: NSPoint(x: 9.0, y: 10.3), radius: 6.2, startAngle: 135, endAngle: 225, clockwise: false)
-            waveLeft.stroke()
-
-            let waveRight = NSBezierPath()
-            waveRight.lineWidth = 1.35
-            waveRight.lineCapStyle = .round
-            waveRight.appendArc(withCenter: NSPoint(x: 9.0, y: 10.3), radius: 6.2, startAngle: -45, endAngle: 45, clockwise: false)
-            waveRight.stroke()
-
-            return true
+    /// Symbol names for the status item, most specific first. The first one the
+    /// running OS provides is used (e.g. `mic.badge.xmark` needs SF Symbols 4 / macOS 13).
+    private static func statusSymbolCandidates(for state: ConnectionState) -> [String] {
+        switch state {
+        case .streaming: return ["mic.fill"]
+        case .connecting: return ["mic"]
+        case .error: return ["mic.badge.xmark", "exclamationmark.triangle", "mic.slash"]
+        case .disconnected: return ["mic.slash"]
         }
+    }
 
-        img.isTemplate = !connected
-        return img
+    /// Template SF Symbol for the menu bar: macOS tints it for light, dark and tinted
+    /// menu bars, so state is conveyed by the glyph rather than by colour.
+    public static func makeStatusIcon(for state: ConnectionState, accessibilityDescription: String?) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        for name in statusSymbolCandidates(for: state) {
+            if let img = NSImage(systemSymbolName: name, accessibilityDescription: accessibilityDescription)?
+                .withSymbolConfiguration(config) {
+                img.isTemplate = true
+                return img
+            }
+        }
+        return nil
     }
 
     private static func menuSymbol(_ name: String) -> NSImage? {
@@ -85,9 +56,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         // Create Status Item in System Menu Bar
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = item.button {
-            button.image = Self.makeMacMicIcon(connected: false)
-        }
         self.statusItem = item
 
         // Build Menu
@@ -127,11 +95,12 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         updateMenuTitles()
 
-        // Subscribe to ViewModel connection state changes
+        // Subscribe to ViewModel connection state changes. @Published emits in willSet,
+        // so use the emitted value rather than re-reading the view model.
         vm.$connectionState
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.updateMenuTitles()
+            .sink { [weak self] state in
+                self?.updateMenuTitles(state: state)
             }
             .store(in: &cancellables)
 
@@ -144,11 +113,13 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             .store(in: &cancellables)
     }
 
-    public func updateMenuTitles() {
+    public func updateMenuTitles(state: ConnectionState? = nil) {
         let l10n = LocalizationManager.shared
         guard let vm = viewModel else { return }
 
-        let isConn = vm.isStreaming
+        let state = state ?? vm.connectionState
+        let isConn: Bool
+        if case .streaming = state { isConn = true } else { isConn = false }
 
         // 1. Status string
         statusMenuItem.title = isConn ? l10n.t("menu_status_connected") : l10n.t("menu_status_disconnected")
@@ -171,9 +142,14 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         settingsMenuItem.image = Self.menuSymbol("gearshape")
         quitMenuItem.image = Self.menuSymbol("power")
 
-        // Update status icon with custom MacMic AppIcon representation
+        // Status item glyph (template image; only rebuilt when the glyph changes).
         if let button = statusItem?.button {
-            button.image = Self.makeMacMicIcon(connected: isConn)
+            let symbol = Self.statusSymbolCandidates(for: state).first
+            if symbol != currentStatusSymbol || button.image == nil {
+                currentStatusSymbol = symbol
+                button.image = Self.makeStatusIcon(for: state, accessibilityDescription: "MacMic")
+            }
+            button.toolTip = vm.statusMessage(using: l10n)
         }
     }
 
