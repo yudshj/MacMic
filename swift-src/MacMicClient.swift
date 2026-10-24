@@ -52,6 +52,39 @@ public final class MacMicClient: ObservableObject {
         self.port = port
         self.isUSBMode = isUSBMode
         self.audioEngine = audioEngine
+        Self.installPerfHooksIfRequested(self)
+        Self.installGracefulTermination(for: self)
+    }
+
+    // MARK: Graceful termination
+
+    private static var terminationSources: [DispatchSourceSignal] = []
+    private static var terminationObserver: NSObjectProtocol?
+
+    /// SIGTERM/SIGINT/SIGHUP (kill, pkill, logout) and normal quit skip Cocoa teardown of the
+    /// audio output, leaving a HAL client that died mid-IO (suspected cause of BlackHole wedges).
+    /// Stop capture on the phone and stop/dispose the output unit first, bounded by a timeout.
+    private static func installGracefulTermination(for client: MacMicClient) {
+        guard terminationSources.isEmpty else { return }
+        for sig in [SIGTERM, SIGINT, SIGHUP] {
+            signal(sig, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .global(qos: .userInitiated))
+            src.setEventHandler { [weak client] in
+                client?.shutdownForTermination()
+                _exit(0)
+            }
+            src.resume()
+            terminationSources.append(src)
+        }
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("NSApplicationWillTerminateNotification"), object: nil, queue: nil
+        ) { [weak client] _ in client?.shutdownForTermination() }
+    }
+
+    /// Never blocks the audio thread; waits ≤ 1 s for the control queue to stop the output.
+    func shutdownForTermination() {
+        disconnect()
+        audioEngine.stopAndWait(timeout: 1.0)
     }
 
     public func connect(host: String, isUSB: Bool = false) {
@@ -471,5 +504,56 @@ public final class MacMicClient: ObservableObject {
             }
         }
         return isSet
+    }
+}
+
+// MARK: - Perf-measurement hooks (debug only, inert unless launched with -macmic_perf_control YES)
+
+import AppKit
+
+/// Appends a line to /tmp/macmic_perf.log, only when launched with -macmic_perf_control YES
+/// (NSLog payloads are redacted as <private> in the unified log).
+let macmicPerfEnabled = UserDefaults.standard.bool(forKey: "macmic_perf_control")
+func macmicPerfLog(_ message: @autoclosure () -> String) {
+    guard macmicPerfEnabled else { return }
+    let line = "\(Date()) pid=\(getpid()) \(message())\n"
+    if let h = FileHandle(forWritingAtPath: "/tmp/macmic_perf.log") ?? {
+        FileManager.default.createFile(atPath: "/tmp/macmic_perf.log", contents: nil)
+        return FileHandle(forWritingAtPath: "/tmp/macmic_perf.log") }() {
+        h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile()
+    }
+}
+
+extension MacMicClient {
+    /// Lets scripted CPU measurements drive the app without Accessibility:
+    ///   launch args:  -macmic_perf_control YES  [-macmic_perf_autoconnect_usb YES] [-macmic_perf_close_window YES]
+    ///   distributed notification "com.macmic.perf" with object "connect" | "disconnect" | "hide" | "show" | "stats"
+    /// Every action is logged with NSLog("[MacMicPerf] ...").
+    static func installPerfHooksIfRequested(_ client: MacMicClient) {
+        let d = UserDefaults.standard
+        guard d.bool(forKey: "macmic_perf_control") else { return }
+        let center = DistributedNotificationCenter.default()
+        center.addObserver(forName: Notification.Name("com.macmic.perf"), object: nil, queue: .main) { note in
+            client.perfAction((note.object as? String) ?? "")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            if d.bool(forKey: "macmic_perf_close_window") { client.perfAction("hide") }
+            if d.bool(forKey: "macmic_perf_autoconnect_usb") { client.perfAction("connect") }
+        }
+    }
+
+    fileprivate func perfAction(_ action: String) {
+        switch action {
+        case "connect": connect(host: "127.0.0.1", isUSB: true)
+        case "disconnect": disconnect()
+        case "hide": AppDelegate.mainWindow?.performClose(nil)
+        case "show": AppDelegate.shared?.showMainWindow()
+        case "stats": break
+        default: return
+        }
+        let dn = audioEngine.denoiser
+        let r = audioEngine.ringStats
+        macmicPerfLog("action=\(action) state=\(state) denoise=\(dn.effectiveDescription) latency=\(dn.activeLatency) "
+            + "underruns=\(r.underruns) trims=\(r.trims) buffered=\(r.buffered) pkts=\(packetsReceived)")
     }
 }

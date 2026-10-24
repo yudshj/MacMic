@@ -252,6 +252,15 @@ public final class DenoiseProcessor {
         outFifo.reserveCapacity(4096)
     }
 
+    /// Config actually in effect on the processing thread (for logs).
+    public var effectiveDescription: String {
+        os_unfair_lock_lock(&configLock)
+        let req = requested
+        os_unfair_lock_unlock(&configLock)
+        let active = path?.mode?.rawValue ?? "bypass"
+        return "requested(enabled=\(req.enabled) mode=\(req.mode.rawValue) strength=\(req.strength)) active=\(active)"
+    }
+
     public static var isAppleVoiceIsolationAvailable: Bool { AppleVoiceIsolationEngine.isAvailable }
 
     /// Thread-safe; picked up at the start of the next `process` call.
@@ -341,6 +350,8 @@ public final class DenoiseProcessor {
         activeEnabled = cfg.enabled
         activeMode = cfg.mode
         activeLatency = newPath.latency
+        macmicPerfLog("denoise path -> enabled=\(cfg.enabled) mode=\(newPath.mode?.rawValue ?? "bypass") "
+            + "strength=\(cfg.strength) latency=\(newPath.latency) samples")
         // A new path starts fully wet at the requested strength; the crossfade hides the switch.
         currentStrength = cfg.enabled ? max(0, min(1, cfg.strength)) : 0
     }

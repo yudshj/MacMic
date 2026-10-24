@@ -142,6 +142,7 @@ public final class AudioEngine: ObservableObject {
     private var stereoScratch: [Int16] = []
 
     public var currentDevice: AudioDevice?
+    public var ringStats: (underruns: Int, trims: Int, buffered: Int) { (ring.underruns, ring.trims, ring.bufferedFrames) }
 
     public init() {
         self.currentDevice = AudioDeviceManager.getDefaultDevice()
@@ -175,6 +176,12 @@ public final class AudioEngine: ObservableObject {
 
     public func stop() {
         controlQueue.async { [weak self] in self?.stopSync() }
+    }
+    @discardableResult
+    public func stopAndWait(timeout: TimeInterval) -> Bool {
+        let done = DispatchSemaphore(value: 0)
+        controlQueue.async { [weak self] in self?.stopSync(); done.signal() }
+        return done.wait(timeout: .now() + timeout) == .success
     }
 
     private func startSync(device: AudioDevice? = nil) {
