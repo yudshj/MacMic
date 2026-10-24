@@ -205,6 +205,7 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "断开连接",
         "menu_open_panel": "打开主面板",
         "menu_settings": "偏好设置...",
+        "menu_lite_mode": "轻量模式（关闭窗口后释放内存）",
         "menu_quit": "退出 MacMic",
 
         "denoise_header": "降噪",
@@ -302,6 +303,7 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "中斷連線",
         "menu_open_panel": "開啟主面板",
         "menu_settings": "偏好設定...",
+        "menu_lite_mode": "輕量模式（關閉視窗後釋放記憶體）",
         "menu_quit": "結束 MacMic",
 
         "denoise_header": "降噪",
@@ -399,6 +401,7 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "Disconnect",
         "menu_open_panel": "Open Main Panel",
         "menu_settings": "Settings...",
+        "menu_lite_mode": "Lite Mode (free memory when the window closes)",
         "menu_quit": "Quit MacMic",
 
         "denoise_header": "Noise Reduction",

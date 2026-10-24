@@ -113,6 +113,20 @@ Or download the installer from the [BlackHole Website](https://existential.audio
 
 ---
 
+## Lite Mode (on by default)
+
+Closing the main window keeps MacMic running in the menu bar and **releases the UI memory**:
+
+| State | Memory (Activity Monitor footprint) |
+| --- | --- |
+| Window open | ~144 MB |
+| Window closed, Lite Mode on | ~67 MB |
+| Window closed, Lite Mode off | ~145 MB |
+
+Reopening takes about 0.1 s. Uncheck "Lite Mode" in the menu bar menu to keep the window resident instead.
+
+---
+
 ## Noise Suppression Tips
 
 - **Default is Apple Voice Isolation**: measured both stronger and cheaper (~4% vs ~6% CPU); it costs ~56 ms extra latency, which is unnoticeable in calls.
