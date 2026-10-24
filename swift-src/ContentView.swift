@@ -693,7 +693,9 @@ public struct ContentView: View {
 
                 HStack(spacing: 5) {
                     Image(systemName: "clock")
-                    Text(vm.denoiseMode == .rnnoise ? l10n.t("denoise_info_rnnoise") : l10n.t("denoise_info_apple"))
+                    Text(!vm.denoiseEnabled
+                         ? l10n.t("denoise_info_off")
+                         : (vm.denoiseMode == .rnnoise ? l10n.t("denoise_info_rnnoise") : l10n.t("denoise_info_apple")))
                 }
                 .font(.system(size: 10.5))
                 .foregroundColor(.secondary)
