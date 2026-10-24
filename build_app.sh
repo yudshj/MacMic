@@ -1,7 +1,19 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Building MacMic Native App for macOS (Apple Silicon arm64)..."
+MODE="${1:-standard}"
+case "$MODE" in
+    release)
+        OPT_FLAGS=(-O -whole-module-optimization)
+        echo "🚀 Building MacMic RELEASE for macOS (Apple Silicon arm64) — WMO + stripped..."
+        ;;
+    standard)
+        OPT_FLAGS=(-O)
+        echo "🚀 Building MacMic Native App for macOS (Apple Silicon arm64)..."
+        ;;
+    *)
+        echo "usage: $0 [standard|release]" >&2; exit 2 ;;
+esac
 
 APP_NAME="MacMic.app"
 CONTENTS="$APP_NAME/Contents"
@@ -17,7 +29,7 @@ mkdir -p "$MACOS" "$RESOURCES"
 
 # 3. Compile Pure Swift Application into arm64 native Mach-O binary
 echo "📦 Compiling Swift sources and statically linking libopus.a..."
-swiftc -sdk $(xcrun --show-sdk-path) -target arm64-apple-macos12.0 -parse-as-library -O \
+swiftc -sdk $(xcrun --show-sdk-path) -target arm64-apple-macos12.0 -parse-as-library "${OPT_FLAGS[@]}" \
     -I swift-src \
     /opt/homebrew/opt/opus/lib/libopus.a \
     third_party/rnnoise/lib/librnnoise.a \
@@ -86,8 +98,16 @@ cat << 'PLIST' > "$CONTENTS/Info.plist"
 </plist>
 PLIST
 
-# 6. Ad-hoc codesign
+# 6. Release: drop symbol/debug tables (must happen before signing)
+if [[ "$MODE" == "release" ]]; then
+    BEFORE=$(stat -f%z "$MACOS/MacMic")
+    strip -x -S "$MACOS/MacMic"
+    AFTER=$(stat -f%z "$MACOS/MacMic")
+    echo "🔻 Stripped $(( (BEFORE - AFTER) / 1024 )) KB ($(( BEFORE / 1024 / 1024 )) MB -> $(( AFTER / 1024 / 1024 )) MB)"
+fi
+
+# 7. Ad-hoc codesign
 codesign --force --deep --sign - "$APP_NAME"
 
-echo "🎉 Successfully built pure Swift native $APP_NAME for Apple Silicon!"
+echo "🎉 Successfully built pure Swift native $APP_NAME for Apple Silicon ($MODE)!"
 ls -lh "$MACOS/MacMic"
