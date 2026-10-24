@@ -48,6 +48,45 @@ public final class SettingsViewModel: ObservableObject {
     }
 }
 
+/// System Settings–style row icon: white glyph on a colored rounded square.
+struct SettingsIcon: View {
+    let systemName: String
+    let color: Color
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.white)
+            .frame(width: 22, height: 22)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(color)
+            )
+    }
+}
+
+/// One row inside a grouped settings card.
+struct SettingsRow<Accessory: View>: View {
+    let icon: String
+    let color: Color
+    let title: String
+    @ViewBuilder var accessory: () -> Accessory
+
+    var body: some View {
+        HStack(spacing: 10) {
+            SettingsIcon(systemName: icon, color: color)
+            Text(title)
+                .font(.system(size: 13))
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            accessory()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(minHeight: 40)
+    }
+}
+
 public struct SettingsView: View {
     @ObservedObject var l10n = LocalizationManager.shared
     @StateObject private var vm = SettingsViewModel()
@@ -60,20 +99,16 @@ public struct SettingsView: View {
             // Header Bar
             HStack {
                 Text(l10n.t("settings_title"))
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Button(action: {
+                Button(l10n.t("done")) {
                     presentationMode.wrappedValue.dismiss()
-                }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 17))
-                        .foregroundColor(.secondary.opacity(0.8))
                 }
-                .buttonStyle(.plain)
-                .focusable(false)
+                .keyboardShortcut(.cancelAction)
+                .controlSize(.regular)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 12)
+            .padding(.top, 14)
             .padding(.bottom, 10)
 
             // Tab Selector
@@ -90,11 +125,14 @@ public struct SettingsView: View {
             Divider()
 
             // Content Area
-            VStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 switch vm.selectedTab {
                 case .display:
+                    sectionHeader(l10n.t("settings_display_section"))
                     displaySection
+                    sectionFooter(l10n.t("settings_appearance_footer"))
                 case .general:
+                    sectionHeader(l10n.t("settings_general_section"))
                     generalSection
                 case .about:
                     aboutSection
@@ -103,19 +141,33 @@ public struct SettingsView: View {
             }
             .padding(16)
         }
-        .frame(width: 360, height: 320)
-        .background(Color(NSColor.windowBackgroundColor))
+        .frame(width: 360, height: 360)
+        .background(Color(nsColor: .windowBackgroundColor))
         .preferredColorScheme(l10n.currentTheme.colorScheme)
+    }
+
+    private func sectionHeader(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.secondary)
+            .padding(.leading, 4)
+    }
+
+    private func sectionFooter(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10.5))
+            .foregroundColor(.secondary)
+            .padding(.leading, 4)
+    }
+
+    private var rowDivider: some View {
+        Divider().padding(.leading, 44)
     }
 
     // MARK: - Display Section
     private var displaySection: some View {
         VStack(spacing: 0) {
-            // Language Setting Row
-            HStack {
-                Label(l10n.t("settings_language"), systemImage: "globe")
-                    .font(.system(size: 13, weight: .medium))
-                Spacer()
+            SettingsRow(icon: "globe", color: .blue, title: l10n.t("settings_language")) {
                 Picker("", selection: $l10n.currentLanguage) {
                     ForEach(AppLanguage.allCases) { lang in
                         Text(lang.displayName).tag(lang)
@@ -123,18 +175,12 @@ public struct SettingsView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
-                .frame(width: 140)
+                .fixedSize()
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 12)
 
-            Divider()
+            rowDivider
 
-            // Theme Setting Row
-            HStack {
-                Label(l10n.t("settings_theme"), systemImage: "circle.lefthalf.filled")
-                    .font(.system(size: 13, weight: .medium))
-                Spacer()
+            SettingsRow(icon: "circle.lefthalf.filled", color: .indigo, title: l10n.t("settings_theme")) {
                 Picker("", selection: $l10n.currentTheme) {
                     ForEach(AppTheme.allCases) { theme in
                         Text(theme.displayName(using: l10n)).tag(theme)
@@ -142,125 +188,105 @@ public struct SettingsView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(width: 195)
+                .fixedSize()
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 12)
         }
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.7))
-        .cornerRadius(10)
+        .macMicCard(padding: 0)
     }
 
     // MARK: - General Section
     private var generalSection: some View {
         VStack(spacing: 0) {
-            // Launch at Login Toggle
-            HStack {
-                Text(l10n.t("settings_launch_at_login"))
-                    .font(.system(size: 13, weight: .medium))
-                Spacer()
+            SettingsRow(icon: "power", color: .green, title: l10n.t("settings_launch_at_login")) {
                 Toggle("", isOn: $vm.launchAtLogin)
                     .labelsHidden()
                     .toggleStyle(.switch)
+                    .controlSize(.small)
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 12)
 
-            Divider()
+            rowDivider
 
-            // Hide Dock Icon Toggle
-            HStack {
-                Text(l10n.t("settings_hide_dock"))
-                    .font(.system(size: 13, weight: .medium))
-                Spacer()
+            SettingsRow(icon: "dock.rectangle", color: .gray, title: l10n.t("settings_hide_dock")) {
                 Toggle("", isOn: $vm.hideDock)
                     .labelsHidden()
                     .toggleStyle(.switch)
+                    .controlSize(.small)
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 12)
         }
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.7))
-        .cornerRadius(10)
+        .macMicCard(padding: 0)
     }
 
     // MARK: - About Section
     private var aboutSection: some View {
         VStack(spacing: 12) {
             // App Badge
-            VStack(spacing: 4) {
-                Image(systemName: "mic.fill.badge.plus")
-                    .font(.system(size: 32, weight: .bold))
-                    .foregroundColor(.accentColor)
-                Text("MacMic")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
-                Text("Version 1.0.0 (Apple Silicon Native)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.secondary)
+            HStack(spacing: 12) {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 46, height: 46)
+                    .background(
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .fill(LinearGradient(colors: [Color.accentColor.opacity(0.85), Color.accentColor],
+                                                 startPoint: .top, endPoint: .bottom))
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("MacMic")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("\(l10n.t("about_version")) 1.0.0 · Apple Silicon")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                Spacer(minLength: 0)
             }
-            .padding(.top, 2)
+            .padding(.horizontal, 4)
 
             // Info Card
-            VStack(spacing: 8) {
-                // Project URL
-                HStack {
-                    Label(l10n.t("about_project_url"), systemImage: "link")
-                        .font(.system(size: 12, weight: .medium))
-                    Spacer()
+            VStack(spacing: 0) {
+                SettingsRow(icon: "link", color: .blue, title: l10n.t("about_project_url")) {
                     Button(action: {
                         if let url = URL(string: "https://github.com/luanyufei/MacMic") {
                             NSWorkspace.shared.open(url)
                         }
                     }) {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 3) {
                             Text("GitHub")
-                            Image(systemName: "arrow.up.right.square")
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 9, weight: .bold))
                         }
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 12))
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.link)
                     .focusable(false)
+                    .help(l10n.t("about_open_github"))
                 }
 
-                Divider()
+                rowDivider
 
-                // Author
-                HStack {
-                    Label(l10n.t("about_author"), systemImage: "person.crop.circle")
-                        .font(.system(size: 12, weight: .medium))
-                    Spacer()
+                SettingsRow(icon: "person.fill", color: .orange, title: l10n.t("about_author")) {
                     Text("FEEFEENOON")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundColor(.primary)
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
                 }
 
-                Divider()
+                rowDivider
 
-                // Email
-                HStack {
-                    Label(l10n.t("about_email"), systemImage: "envelope.fill")
-                        .font(.system(size: 12, weight: .medium))
-                    Spacer()
+                SettingsRow(icon: "envelope.fill", color: .teal, title: l10n.t("about_email")) {
                     Button(action: {
                         if let url = URL(string: "mailto:noonyjufee@gmail.com") {
                             NSWorkspace.shared.open(url)
                         }
                     }) {
-                        HStack(spacing: 4) {
-                            Text("noonyjufee@gmail.com")
-                            Image(systemName: "paperplane.fill")
-                        }
-                        .font(.system(size: 11, weight: .semibold))
+                        Text("noonyjufee@gmail.com")
+                            .font(.system(size: 12))
+                            .lineLimit(1)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.link)
                     .focusable(false)
+                    .help(l10n.t("about_send_email"))
                 }
             }
-            .padding(10)
-            .background(Color(NSColor.controlBackgroundColor).opacity(0.7))
-            .cornerRadius(10)
+            .macMicCard(padding: 0)
         }
     }
 }

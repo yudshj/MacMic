@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 window.styleMask.insert(.fullSizeContentView)
                 window.styleMask.remove(.resizable)
                 window.isMovableByWindowBackground = true
-                window.setContentSize(NSSize(width: 360, height: 530))
+                window.setContentSize(NSSize(width: MacMicStyle.windowWidth, height: MacMicStyle.windowHeight))
                 window.center()
             }
         }

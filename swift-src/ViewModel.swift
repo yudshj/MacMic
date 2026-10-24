@@ -41,10 +41,15 @@ public final class AppViewModel: ObservableObject {
         didSet {
             if selectedTransport == .usb {
                 host = "127.0.0.1"
+                refreshADBDevices()
             } else if selectedTransport == .wifiDirect && (host == "127.0.0.1" || host.isEmpty) {
                 host = "192.168.49.1"
             }
         }
+    }
+    @Published public var adbDevices: [ADBDevice] = []
+    @Published public var selectedADBSerial: String = "" {
+        didSet { UserDefaults.standard.set(selectedADBSerial, forKey: "macmic_adb_serial") }
     }
     @Published public var selectedDevice: AudioDevice?
     @Published public var availableDevices: [AudioDevice] = []
@@ -83,6 +88,7 @@ public final class AppViewModel: ObservableObject {
         let savedGain = UserDefaults.standard.object(forKey: "macmic_gain") as? Double ?? 100.0
 
         self.host = savedHost
+        self.selectedADBSerial = UserDefaults.standard.string(forKey: "macmic_adb_serial") ?? ""
         self.ipHistory = savedHistory
         self.gainValue = savedGain
 
@@ -137,6 +143,20 @@ public final class AppViewModel: ObservableObject {
         }
     }
 
+    /// Re-scan `adb devices` off the main thread and keep the user's choice when still attached.
+    public func refreshADBDevices() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let devs = ADBHelper.listDevices()
+            DispatchQueue.main.async {
+                self.adbDevices = devs
+                if !devs.contains(where: { $0.serial == self.selectedADBSerial }) {
+                    // Prefer a USB-attached device over stale wireless-debugging entries
+                    self.selectedADBSerial = (devs.first(where: { !$0.isWireless }) ?? devs.first)?.serial ?? ""
+                }
+            }
+        }
+    }
+
     public var isStreaming: Bool {
         if case .streaming = connectionState { return true }
         return false
@@ -169,7 +189,7 @@ public final class AppViewModel: ObservableObject {
         if isStreaming {
             client.disconnect()
             if selectedTransport == .usb {
-                ADBHelper.removeForward(localPort: 8125)
+                ADBHelper.removeForward(localPort: 8125, serial: selectedADBSerial.isEmpty ? nil : selectedADBSerial)
             }
         } else {
             // Prompt macOS Microphone Access Permission Dialog if not granted
@@ -180,12 +200,17 @@ public final class AppViewModel: ObservableObject {
             }
             if selectedTransport == .usb {
                 let devs = ADBHelper.listDevices()
+                adbDevices = devs
                 if devs.isEmpty {
                     alertMessage = l10n.t("alert_no_adb_device")
                     showAlert = true
                     return
                 }
-                if !ADBHelper.forwardPort(localPort: 8125, remotePort: 8125) {
+                // Use the device picked in the UI; otherwise prefer USB over wireless entries
+                let target = devs.first(where: { $0.serial == selectedADBSerial })
+                    ?? devs.first(where: { !$0.isWireless }) ?? devs[0]
+                selectedADBSerial = target.serial
+                if !ADBHelper.forwardPort(localPort: 8125, remotePort: 8125, serial: target.serial) {
                     alertMessage = l10n.t("alert_adb_forward_failed")
                     showAlert = true
                     return

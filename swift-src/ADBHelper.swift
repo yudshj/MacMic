@@ -1,9 +1,19 @@
 import Foundation
 
-public struct ADBDevice: Identifiable {
+public struct ADBDevice: Identifiable, Hashable {
     public var id: String { serial }
     public let serial: String
     public let state: String
+    public var model: String = ""
+
+    /// Wireless-debugging entries look like "192.168.1.5:5555"
+    public var isWireless: Bool { serial.contains(":") }
+
+    public var displayName: String {
+        let name = model.isEmpty ? serial : model.replacingOccurrences(of: "_", with: " ")
+        let kind = isWireless ? "Wi-Fi" : "USB"
+        return model.isEmpty ? "\(serial) · \(kind)" : "\(name) · \(kind) · \(serial)"
+    }
 }
 
 public final class ADBHelper {
@@ -27,7 +37,7 @@ public final class ADBHelper {
         let pipe = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: adb)
-        process.arguments = ["devices"]
+        process.arguments = ["devices", "-l"]
         process.standardOutput = pipe
 
         do {
@@ -41,9 +51,12 @@ public final class ADBHelper {
             for line in lines.dropFirst() {
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
-                let parts = trimmed.split(separator: "\t")
-                if parts.count >= 2 {
-                    devices.append(ADBDevice(serial: String(parts[0]), state: String(parts[1])))
+                // `adb devices -l`: "<serial>   device usb:1-1 product:x model:Pixel_8 device:y transport_id:3"
+                let parts = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                // Only keep usable devices; skip "offline" / "unauthorized" entries
+                if parts.count >= 2, parts[1] == "device" {
+                    let model = parts.first(where: { $0.hasPrefix("model:") }).map { String($0.dropFirst(6)) } ?? ""
+                    devices.append(ADBDevice(serial: String(parts[0]), state: String(parts[1]), model: model))
                 }
             }
             return devices
@@ -53,11 +66,15 @@ public final class ADBHelper {
     }
 
     @discardableResult
-    public static func forwardPort(localPort: Int = 8125, remotePort: Int = 8125) -> Bool {
+    public static func forwardPort(localPort: Int = 8125, remotePort: Int = 8125, serial: String? = nil) -> Bool {
         guard let adb = findADBPath() else { return false }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: adb)
-        process.arguments = ["forward", "tcp:\(localPort)", "tcp:\(remotePort)"]
+        // With multiple devices attached (e.g. a stale wireless-debugging entry), adb needs -s <serial>.
+        var args: [String] = []
+        if let serial = serial { args += ["-s", serial] }
+        args += ["forward", "tcp:\(localPort)", "tcp:\(remotePort)"]
+        process.arguments = args
         do {
             try process.run()
             process.waitUntilExit()
@@ -68,11 +85,14 @@ public final class ADBHelper {
     }
 
     @discardableResult
-    public static func removeForward(localPort: Int = 8125) -> Bool {
+    public static func removeForward(localPort: Int = 8125, serial: String? = nil) -> Bool {
         guard let adb = findADBPath() else { return false }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: adb)
-        process.arguments = ["forward", "--remove", "tcp:\(localPort)"]
+        var args: [String] = []
+        if let serial = serial { args += ["-s", serial] }
+        args += ["forward", "--remove", "tcp:\(localPort)"]
+        process.arguments = args
         do {
             try process.run()
             process.waitUntilExit()

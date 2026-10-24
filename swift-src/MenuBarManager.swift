@@ -74,6 +74,12 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         return img
     }
 
+    private static func menuSymbol(_ name: String) -> NSImage? {
+        let img = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        img?.isTemplate = true
+        return img
+    }
+
     public func setup(with vm: AppViewModel) {
         self.viewModel = vm
 
@@ -158,6 +164,12 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         // 5. Quit
         quitMenuItem.title = l10n.t("menu_quit")
+
+        // SF Symbol glyphs for a modern macOS menu look
+        toggleMenuItem.image = Self.menuSymbol(isConn ? "stop.fill" : "play.fill")
+        openPanelMenuItem.image = Self.menuSymbol("macwindow")
+        settingsMenuItem.image = Self.menuSymbol("gearshape")
+        quitMenuItem.image = Self.menuSymbol("power")
 
         // Update status icon with custom MacMic AppIcon representation
         if let button = statusItem?.button {

@@ -17,6 +17,8 @@ public final class MacMicClient: ObservableObject {
     private var host: String
     private var port: Int
     private var isUSBMode: Bool
+    /// Reassembly buffer for media frames multiplexed on the TCP control channel (USB/ADB mode).
+    private var tcpStreamBuf: [UInt8] = []
 
     public let audioEngine: AudioEngine
     private var opusDecoder: OpusDecoderWrapper?
@@ -56,6 +58,7 @@ public final class MacMicClient: ObservableObject {
         disconnect()
         self.host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         self.isUSBMode = isUSB
+        self.tcpStreamBuf.removeAll(keepingCapacity: true)
         self.isRunning = true
         self.totalPktsCount = 0
         self.totalBytesCount = 0
@@ -308,11 +311,56 @@ public final class MacMicClient: ObservableObject {
                         disconnect()
                         break
                     }
+                    // USB (ADB) mode: the phone multiplexes audio onto the control TCP stream.
+                    // Frames are [type(1)][len(4 BE)][len bytes]; type 0x04 carries a media packet
+                    // with the same layout as a Wi-Fi UDP datagram (Opus payload at offset 11).
+                    if isUSBMode {
+                        tcpStreamBuf.append(contentsOf: tcpBuf[0..<n])
+                        drainTCPFrames()
+                    }
                 }
             }
         }
     }
-    
+
+    /// Splits the USB-mode TCP stream into frames. Two framings are interleaved on the socket:
+    ///  - media:   [0x04 0x00][len u16 BE][seq u16][ts u32][flag u8][opus...]  total = 4 + len
+    ///            (byte-identical to a Wi-Fi UDP datagram, Opus payload at offset 11)
+    ///  - control: [type u8 (0x65...0x69)][len u32 BE][status + data]           total = 5 + len
+    private func drainTCPFrames() {
+        var offset = 0
+        let buf = tcpStreamBuf
+        while buf.count - offset >= 4 {
+            let total: Int
+            let isMedia = buf[offset] == 0x04 && buf[offset + 1] == 0x00
+            if isMedia {
+                total = 4 + (Int(buf[offset + 2]) << 8 | Int(buf[offset + 3]))
+            } else if (0x65...0x69).contains(buf[offset]) {
+                guard buf.count - offset >= 5 else { break }
+                let len = Int(buf[offset + 1]) << 24 | Int(buf[offset + 2]) << 16
+                        | Int(buf[offset + 3]) << 8 | Int(buf[offset + 4])
+                guard len < 64 * 1024 else { return resyncTCPStream() }
+                total = 5 + len
+            } else {
+                return resyncTCPStream()
+            }
+            guard buf.count - offset >= total else { break }
+            if isMedia {
+                handleMediaPacket(data: Data(buf[offset..<(offset + total)]))
+            }
+            offset += total
+        }
+        if offset > 0 { tcpStreamBuf.removeFirst(offset) }
+    }
+
+    /// Framing lost: skip ahead to the next plausible media header (0x04 0x00) and keep going.
+    private func resyncTCPStream() {
+        var i = 1
+        while i + 1 < tcpStreamBuf.count, !(tcpStreamBuf[i] == 0x04 && tcpStreamBuf[i + 1] == 0x00) { i += 1 }
+        NSLog("[MacMic] TCP stream resync, skipped \(i) bytes")
+        tcpStreamBuf.removeFirst(min(i, tcpStreamBuf.count))
+    }
+
     private func handleMediaPacket(data: Data) {
         let n = data.count
         // UDP Media Header: [ver(2BE)] [data_len(2BE)] [seq(2BE)] [ts(4BE)] [flag(1)] = 11 bytes

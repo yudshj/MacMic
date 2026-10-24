@@ -204,7 +204,23 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "断开连接",
         "menu_open_panel": "打开主面板",
         "menu_settings": "偏好设置...",
-        "menu_quit": "退出 MacMic"
+        "menu_quit": "退出 MacMic",
+
+        "adb_device_label": "ADB 设备",
+        "adb_no_devices": "未发现已授权的 ADB 设备",
+        "adb_refresh": "刷新 ADB 设备",
+        "usb_hint": "通过 USB 调试连接所选 Android 设备，自动转发端口 8125",
+        "wifi_direct_hint": "请先连接到手机创建的 Wi-Fi 直连热点",
+        "refresh_devices": "刷新设备列表",
+        "recommended_tag": "推荐",
+        "blackhole_missing": "未检测到 BlackHole 虚拟声卡",
+        "blackhole_missing_detail": "请安装 BlackHole 2ch 作为虚拟麦克风",
+        "unmute": "取消静音",
+        "stats_packets": "数据包",
+        "stats_received": "已接收",
+        "level_idle": "无信号",
+        "status_ready_hint": "选择连接方式后点击“连接”",
+        "settings_appearance_footer": "主题与语言更改立即生效"
     ]
 
     // 2. 繁體中文
@@ -273,7 +289,23 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "中斷連線",
         "menu_open_panel": "開啟主面板",
         "menu_settings": "偏好設定...",
-        "menu_quit": "結束 MacMic"
+        "menu_quit": "結束 MacMic",
+
+        "adb_device_label": "ADB 裝置",
+        "adb_no_devices": "未發現已授權的 ADB 裝置",
+        "adb_refresh": "重新整理 ADB 裝置",
+        "usb_hint": "透過 USB 偵錯連接所選 Android 裝置，自動轉發連接埠 8125",
+        "wifi_direct_hint": "請先連線到手機建立的 Wi-Fi 直連熱點",
+        "refresh_devices": "重新整理裝置列表",
+        "recommended_tag": "推薦",
+        "blackhole_missing": "未偵測到 BlackHole 虛擬音效卡",
+        "blackhole_missing_detail": "請安裝 BlackHole 2ch 作為虛擬麥克風",
+        "unmute": "取消靜音",
+        "stats_packets": "封包",
+        "stats_received": "已接收",
+        "level_idle": "無訊號",
+        "status_ready_hint": "選擇連線方式後點擊「連線」",
+        "settings_appearance_footer": "主題與語言變更立即生效"
     ]
 
     // 3. English
@@ -342,7 +374,23 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "Disconnect",
         "menu_open_panel": "Open Main Panel",
         "menu_settings": "Settings...",
-        "menu_quit": "Quit MacMic"
+        "menu_quit": "Quit MacMic",
+
+        "adb_device_label": "ADB device",
+        "adb_no_devices": "No authorized ADB devices found",
+        "adb_refresh": "Refresh ADB devices",
+        "usb_hint": "Connects the selected Android device over USB debugging and forwards port 8125 automatically",
+        "wifi_direct_hint": "Join the Wi-Fi Direct hotspot created by your phone first",
+        "refresh_devices": "Refresh devices",
+        "recommended_tag": "Recommended",
+        "blackhole_missing": "BlackHole virtual audio device not found",
+        "blackhole_missing_detail": "Install BlackHole 2ch to use it as a virtual mic",
+        "unmute": "Unmute",
+        "stats_packets": "Packets",
+        "stats_received": "Received",
+        "level_idle": "No signal",
+        "status_ready_hint": "Choose a transport, then click Connect",
+        "settings_appearance_footer": "Theme and language changes apply immediately"
     ]
 
     // 4. 日本語
@@ -411,7 +459,20 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "切断",
         "menu_open_panel": "メイン画面を開く",
         "menu_settings": "設定...",
-        "menu_quit": "MacMicを終了"
+        "menu_quit": "MacMicを終了",
+
+        "usb_hint": "USB デバッグで Android に接続し、ポート 8125 を自動転送します",
+        "wifi_direct_hint": "先にスマートフォンの Wi-Fi Direct ホットスポットに接続してください",
+        "refresh_devices": "デバイスを更新",
+        "recommended_tag": "推奨",
+        "blackhole_missing": "BlackHole 仮想オーディオデバイスが見つかりません",
+        "blackhole_missing_detail": "仮想マイクとして BlackHole 2ch をインストールしてください",
+        "unmute": "ミュート解除",
+        "stats_packets": "パケット",
+        "stats_received": "受信済み",
+        "level_idle": "信号なし",
+        "status_ready_hint": "接続方法を選んで「接続」をクリック",
+        "settings_appearance_footer": "テーマと言語の変更はすぐに反映されます"
     ]
 
     // 5. 한국어
@@ -480,7 +541,20 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "연결 해제",
         "menu_open_panel": "메인 패널 열기",
         "menu_settings": "환경설정...",
-        "menu_quit": "MacMic 종료"
+        "menu_quit": "MacMic 종료",
+
+        "usb_hint": "USB 디버깅으로 Android에 연결하고 포트 8125를 자동 포워딩합니다",
+        "wifi_direct_hint": "먼저 휴대폰의 Wi-Fi Direct 핫스팟에 연결하세요",
+        "refresh_devices": "장치 새로 고침",
+        "recommended_tag": "권장",
+        "blackhole_missing": "BlackHole 가상 오디오 장치를 찾을 수 없습니다",
+        "blackhole_missing_detail": "가상 마이크로 사용할 BlackHole 2ch를 설치하세요",
+        "unmute": "음소거 해제",
+        "stats_packets": "패킷",
+        "stats_received": "수신됨",
+        "level_idle": "신호 없음",
+        "status_ready_hint": "연결 방식을 선택한 후 연결을 클릭하세요",
+        "settings_appearance_footer": "테마와 언어 변경은 즉시 적용됩니다"
     ]
 
     // 6. Español
@@ -549,7 +623,20 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "Desconectar",
         "menu_open_panel": "Abrir panel principal",
         "menu_settings": "Preferencias...",
-        "menu_quit": "Salir de MacMic"
+        "menu_quit": "Salir de MacMic",
+
+        "usb_hint": "Conecta Android mediante depuración USB y reenvía el puerto 8125 automáticamente",
+        "wifi_direct_hint": "Conéctate primero al punto Wi-Fi Direct creado por el teléfono",
+        "refresh_devices": "Actualizar dispositivos",
+        "recommended_tag": "Recomendado",
+        "blackhole_missing": "No se encontró el dispositivo virtual BlackHole",
+        "blackhole_missing_detail": "Instala BlackHole 2ch para usarlo como micrófono virtual",
+        "unmute": "Activar sonido",
+        "stats_packets": "Paquetes",
+        "stats_received": "Recibido",
+        "level_idle": "Sin señal",
+        "status_ready_hint": "Elige un transporte y pulsa Conectar",
+        "settings_appearance_footer": "Los cambios de tema e idioma se aplican al instante"
     ]
 
     // 7. Français
@@ -618,7 +705,20 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "Déconnecter",
         "menu_open_panel": "Ouvrir le panneau principal",
         "menu_settings": "Préférences...",
-        "menu_quit": "Quitter MacMic"
+        "menu_quit": "Quitter MacMic",
+
+        "usb_hint": "Connecte Android via le débogage USB et redirige automatiquement le port 8125",
+        "wifi_direct_hint": "Rejoignez d'abord le point d'accès Wi-Fi Direct du téléphone",
+        "refresh_devices": "Actualiser les appareils",
+        "recommended_tag": "Recommandé",
+        "blackhole_missing": "Périphérique virtuel BlackHole introuvable",
+        "blackhole_missing_detail": "Installez BlackHole 2ch pour l'utiliser comme micro virtuel",
+        "unmute": "Réactiver le son",
+        "stats_packets": "Paquets",
+        "stats_received": "Reçu",
+        "level_idle": "Aucun signal",
+        "status_ready_hint": "Choisissez un transport, puis cliquez sur Connecter",
+        "settings_appearance_footer": "Les changements de thème et de langue sont immédiats"
     ]
 
     // 8. Русский
@@ -687,7 +787,20 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "Отключить",
         "menu_open_panel": "Открыть главное окно",
         "menu_settings": "Настройки...",
-        "menu_quit": "Выйти из MacMic"
+        "menu_quit": "Выйти из MacMic",
+
+        "usb_hint": "Подключение Android через отладку по USB с автоматической переадресацией порта 8125",
+        "wifi_direct_hint": "Сначала подключитесь к точке Wi-Fi Direct, созданной телефоном",
+        "refresh_devices": "Обновить устройства",
+        "recommended_tag": "Рекомендуется",
+        "blackhole_missing": "Виртуальное устройство BlackHole не найдено",
+        "blackhole_missing_detail": "Установите BlackHole 2ch для использования в качестве виртуального микрофона",
+        "unmute": "Включить звук",
+        "stats_packets": "Пакеты",
+        "stats_received": "Получено",
+        "level_idle": "Нет сигнала",
+        "status_ready_hint": "Выберите способ подключения и нажмите «Подключить»",
+        "settings_appearance_footer": "Изменения темы и языка применяются сразу"
     ]
 
     // 9. Deutsch
@@ -756,6 +869,19 @@ public final class LocalizationManager: ObservableObject {
         "menu_action_disconnect": "Trennen",
         "menu_open_panel": "Hauptfenster öffnen",
         "menu_settings": "Einstellungen...",
-        "menu_quit": "MacMic beenden"
+        "menu_quit": "MacMic beenden",
+
+        "usb_hint": "Verbindet Android per USB-Debugging und leitet Port 8125 automatisch weiter",
+        "wifi_direct_hint": "Verbinde dich zuerst mit dem Wi-Fi-Direct-Hotspot des Telefons",
+        "refresh_devices": "Geräte aktualisieren",
+        "recommended_tag": "Empfohlen",
+        "blackhole_missing": "Virtuelles BlackHole-Gerät nicht gefunden",
+        "blackhole_missing_detail": "Installiere BlackHole 2ch, um es als virtuelles Mikrofon zu nutzen",
+        "unmute": "Stummschaltung aufheben",
+        "stats_packets": "Pakete",
+        "stats_received": "Empfangen",
+        "level_idle": "Kein Signal",
+        "status_ready_hint": "Verbindungsart wählen und auf Verbinden klicken",
+        "settings_appearance_footer": "Design- und Sprachänderungen gelten sofort"
     ]
 }
