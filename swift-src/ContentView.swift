@@ -5,10 +5,10 @@ import SwiftUI
 enum MacMicStyle {
     static let cardRadius: CGFloat = 12
     static let innerRadius: CGFloat = 7
-    static let cardPadding: CGFloat = 12
-    static let sectionSpacing: CGFloat = 10
+    static let cardPadding: CGFloat = 10
+    static let sectionSpacing: CGFloat = 8
     static let windowWidth: CGFloat = 372
-    static let windowHeight: CGFloat = 790
+    static let windowHeight: CGFloat = 650
 }
 
 /// Grouped-form style card (like System Settings): subtle raised surface with a hairline border.
@@ -47,6 +47,49 @@ struct SectionCaption: View {
             .font(.system(size: 11, weight: .semibold))
             .foregroundColor(.secondary)
             .labelStyle(.titleAndIcon)
+    }
+}
+
+/// Native segmented picker with equal, full-width segments. SwiftUI's macOS segmented
+/// picker hugs its labels even inside a flexible frame; AppKit's fill distribution does not.
+/// The control retains its native radio-group accessibility and keyboard navigation.
+struct FullWidthSegmentedPicker<Selection: Equatable>: NSViewRepresentable {
+    @Binding var selection: Selection
+    let options: [Selection]
+    let titles: [String]
+    var enabled: Bool = true
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl(labels: titles, trackingMode: .selectOne,
+                                         target: context.coordinator, action: #selector(Coordinator.select(_:)))
+        control.segmentDistribution = .fillEqually
+        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        control.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return control
+    }
+
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        // SwiftUI may revisit bridged controls during leaf updates. AppKit setters can
+        // invalidate layout even for identical values, so leave unchanged chrome alone.
+        for (index, title) in titles.enumerated() where control.label(forSegment: index) != title {
+            control.setLabel(title, forSegment: index)
+        }
+        let selected = options.firstIndex(of: selection) ?? -1
+        if control.selectedSegment != selected { control.selectedSegment = selected }
+        if control.isEnabled != enabled { control.isEnabled = enabled }
+    }
+
+    final class Coordinator: NSObject {
+        var parent: FullWidthSegmentedPicker
+        init(_ parent: FullWidthSegmentedPicker) { self.parent = parent }
+
+        @objc func select(_ sender: NSSegmentedControl) {
+            guard parent.options.indices.contains(sender.selectedSegment) else { return }
+            parent.selection = parent.options[sender.selectedSegment]
+        }
     }
 }
 
@@ -115,7 +158,7 @@ struct FieldFootnote: View {
     }
 }
 
-/// "Pixel 11 Pro Fold   USB · 66301FDDJ003EY" — model emphasised, transport/serial secondary.
+/// Device name stays legible; technical details live in the field footnote.
 struct ADBDeviceLabel: View {
     let device: ADBDevice
 
@@ -125,12 +168,7 @@ struct ADBDeviceLabel: View {
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundColor(.primary)
                 .lineLimit(1)
-            Text(device.model.isEmpty ? (device.isWireless ? "Wi-Fi" : "USB")
-                                      : "\(device.isWireless ? "Wi-Fi" : "USB") · \(device.serial)")
-                .font(.system(size: 10.5, design: .monospaced))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            Spacer(minLength: 0)
         }
     }
 }
@@ -227,6 +265,8 @@ struct StatusHeaderView: View {
     @ObservedObject var vm: AppViewModel
     @ObservedObject var l10n: LocalizationManager
 
+    @State private var settingsHovered = false
+
     private var stateColor: Color {
         switch vm.connectionState {
         case .streaming: return .green
@@ -256,7 +296,9 @@ struct StatusHeaderView: View {
 
     private var subtitle: String {
         switch vm.connectionState {
-        case .streaming(let d), .connecting(let d), .error(let d):
+        case .streaming:
+            return "\(vm.selectedTransport.displayName(using: l10n)) · \(vm.selectedDevice?.name ?? l10n.t("app_title"))"
+        case .connecting(let d), .error(let d):
             let trimmed = d.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? vm.selectedTransport.displayName(using: l10n) : trimmed
         case .disconnected:
@@ -270,6 +312,29 @@ struct StatusHeaderView: View {
     }
 
     var body: some View {
+        HStack(spacing: 8) {
+            statusSummary
+            Button(action: { vm.showSettings = true }) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.primary.opacity(settingsHovered ? 0.07 : 0))
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { settingsHovered = $0 }
+            .help(l10n.t("settings"))
+            .accessibilityLabel(Text(l10n.t("settings")))
+        }
+        .animation(.easeInOut(duration: 0.2), value: vm.connectionState)
+        .macMicCard()
+    }
+
+    private var statusSummary: some View {
         HStack(spacing: 12) {
             ZStack {
                 Circle()
@@ -287,11 +352,7 @@ struct StatusHeaderView: View {
                         .foregroundColor(stateColor)
                 }
             }
-            .frame(width: 46, height: 46)
-            // Subtle live "pulse" ring driven by the audio level while streaming.
-            // Isolated view observing only the meter, and no implicit animation, so a level
-            // change re-renders one circle instead of animating the whole header every frame.
-            .overlay(PulseRing(meter: vm.meter, active: vm.isStreaming))
+            .frame(width: 40, height: 40)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -306,27 +367,9 @@ struct StatusHeaderView: View {
             }
 
             Spacer(minLength: 0)
-
-            Image(systemName: vm.selectedTransport.icon)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.secondary)
-                .help(vm.selectedTransport.displayName(using: l10n))
         }
-        .animation(.easeInOut(duration: 0.2), value: vm.connectionState)
-        .macMicCard()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(vm.statusMessage(using: l10n)))
-    }
-}
-
-struct PulseRing: View {
-    @ObservedObject var meter: MeterModel
-    let active: Bool
-
-    var body: some View {
-        Circle()
-            .stroke(Color.green.opacity(active ? 0.45 : 0), lineWidth: 2)
-            .scaleEffect(1.0 + CGFloat(active ? meter.level : 0) * 0.22)
     }
 }
 
@@ -343,6 +386,7 @@ private extension ConnectionState {
 // MARK: - Content View
 
 public struct ContentView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var vm = AppViewModel.shared
     @ObservedObject private var l10n = LocalizationManager.shared
 
@@ -362,20 +406,21 @@ public struct ContentView: View {
 
     public var body: some View {
         VStack(spacing: MacMicStyle.sectionSpacing) {
-            topBar
             StatusHeaderView(vm: vm, l10n: l10n)
             transportCard
             audioCard
             denoiseCard
             levelCard
-            Spacer(minLength: 0)
             connectButton
         }
         .padding(.horizontal, 14)
         .padding(.bottom, 14)
         .padding(.top, 6)
-        .frame(width: MacMicStyle.windowWidth, height: MacMicStyle.windowHeight)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .frame(width: MacMicStyle.windowWidth, height: MacMicStyle.windowHeight, alignment: .top)
+        .background(
+            Color(nsColor: .windowBackgroundColor)
+                .overlay(Color.black.opacity(colorScheme == .dark ? 0 : 0.035))
+        )
         .preferredColorScheme(l10n.currentTheme.colorScheme)
         .sheet(isPresented: $vm.showSettings) {
             SettingsView()
@@ -389,55 +434,36 @@ public struct ContentView: View {
         }
     }
 
-    // MARK: Top bar (sits alongside the traffic lights)
-
-    private var topBar: some View {
-        ZStack {
-            Text(l10n.t("app_title"))
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.primary.opacity(0.85))
-
-            HStack {
-                Spacer()
-                Button(action: { vm.showSettings = true }) {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(width: 24, height: 22)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .focusable(false)
-                .help(l10n.t("settings"))
-                .accessibilityLabel(Text(l10n.t("settings")))
-            }
-        }
-        .frame(height: 22)
-    }
-
     // MARK: Transport
 
     private var transportCard: some View {
         VStack(alignment: .leading, spacing: 9) {
             SectionCaption(title: l10n.t("transport_header"), systemImage: "antenna.radiowaves.left.and.right")
 
-            Picker("", selection: $vm.selectedTransport) {
-                ForEach(TransportMode.allCases) { mode in
-                    Text(mode.displayName(using: l10n)).tag(mode)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .disabled(vm.isStreaming)
+            FullWidthSegmentedPicker(
+                selection: $vm.selectedTransport,
+                options: TransportMode.allCases,
+                titles: TransportMode.allCases.map { $0.displayName(using: l10n) },
+                enabled: !vm.isStreaming
+            )
+            .frame(height: 24)
 
             if vm.selectedTransport == .usb {
                 adbDevicePicker
-                FieldFootnote(text: l10n.t("usb_hint"))
+                FieldFootnote(text: adbFootnote)
+                    .help(l10n.t("usb_hint"))
             } else {
                 ipField
             }
         }
         .macMicCard()
+    }
+
+    private var adbFootnote: String {
+        guard let device = vm.adbDevices.first(where: { $0.serial == vm.selectedADBSerial }) else {
+            return l10n.t("usb_hint")
+        }
+        return "\(device.isWireless ? "Wi-Fi" : "USB") · \(device.serial)"
     }
 
     private var adbDevicePicker: some View {
@@ -526,42 +552,55 @@ public struct ContentView: View {
 
     private var audioCard: some View {
         VStack(alignment: .leading, spacing: 9) {
-            SectionCaption(title: l10n.t("audio_routing_header"), systemImage: "speaker.wave.2")
-
-            HStack(spacing: 6) {
-                Picker("", selection: $vm.selectedDevice) {
-                    ForEach(vm.availableDevices) { dev in
-                        if Self.isBlackHole(dev) {
-                            Text("\(dev.name)  ·  \(l10n.t("recommended_tag"))").tag(Optional(dev))
-                        } else {
-                            Text(dev.name).tag(Optional(dev))
-                        }
-                    }
+            HStack {
+                SectionCaption(title: l10n.t("audio_routing_header"), systemImage: "speaker.wave.2")
+                Spacer(minLength: 4)
+                if let dev = vm.selectedDevice, Self.isBlackHole(dev) {
+                    Label(l10n.t("virtual_mic_tag").trimmingCharacters(in: CharacterSet(charactersIn: " []")),
+                          systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity)
-
-                Button(action: { vm.refreshDevices() }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
-                .focusable(false)
-                .help(l10n.t("refresh_devices"))
-                .accessibilityLabel(Text(l10n.t("refresh_devices")))
             }
 
-            if let dev = vm.selectedDevice, Self.isBlackHole(dev) {
-                HStack(spacing: 5) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundColor(.green)
-                    Text(l10n.t("virtual_mic_tag").trimmingCharacters(in: CharacterSet(charactersIn: " []")))
-                        .foregroundColor(.secondary)
+            FieldContainer {
+                Image(systemName: "hifispeaker")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(width: 18)
+                Menu {
+                    ForEach(vm.availableDevices) { dev in
+                        let title = Self.isBlackHole(dev) ? "\(dev.name) · \(l10n.t("recommended_tag"))" : dev.name
+                        Button {
+                            vm.selectedDevice = dev
+                        } label: {
+                            if vm.selectedDevice == dev {
+                                Label(title, systemImage: "checkmark")
+                            } else {
+                                Text(title)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text(vm.selectedDevice?.name ?? l10n.t("audio_routing_header"))
+                            .font(.system(size: 12.5, weight: .medium))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
                 }
-                .font(.system(size: 10.5, weight: .medium))
-            } else if !hasBlackHole {
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.visible)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(Text(l10n.t("audio_routing_header")))
+
+                FieldIconButton(systemImage: "arrow.clockwise", help: l10n.t("refresh_devices")) {
+                    vm.refreshDevices()
+                }
+                .focusable(false)
+            }
+
+            if !hasBlackHole {
                 HintRow(
                     systemImage: "exclamationmark.triangle.fill",
                     text: l10n.t("blackhole_missing"),
@@ -591,14 +630,14 @@ public struct ContentView: View {
                     .accessibilityLabel(Text(l10n.t("denoise_header")))
             }
 
-            if vm.denoiseEnabled {
-                Picker("", selection: $vm.denoiseMode) {
-                    Text(l10n.t("denoise_mode_rnnoise")).tag(DenoiseMode.rnnoise)
-                    Text(l10n.t("denoise_mode_apple")).tag(DenoiseMode.appleVoiceIsolation)
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .disabled(!vm.isAppleVoiceIsolationAvailable)
+            VStack(alignment: .leading, spacing: 9) {
+                FullWidthSegmentedPicker(
+                    selection: $vm.denoiseMode,
+                    options: [.rnnoise, .appleVoiceIsolation],
+                    titles: [l10n.t("denoise_mode_rnnoise"), l10n.t("denoise_mode_apple")],
+                    enabled: vm.denoiseEnabled && vm.isAppleVoiceIsolationAvailable
+                )
+                .frame(height: 24)
                 .help(vm.isAppleVoiceIsolationAvailable ? "" : l10n.t("denoise_apple_unavailable"))
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -622,11 +661,16 @@ public struct ContentView: View {
                 .font(.system(size: 10.5))
                 .foregroundColor(.secondary)
 
-                HintRow(systemImage: "info.circle", text: l10n.t("denoise_stack_hint"))
+                Label(l10n.t("denoise_stack_hint_short"), systemImage: "info.circle")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(l10n.t("denoise_stack_hint"))
             }
+            .disabled(!vm.denoiseEnabled)
+            .opacity(vm.denoiseEnabled ? 1 : 0.5)
         }
         .macMicCard()
-        .animation(.easeInOut(duration: 0.15), value: vm.denoiseEnabled)
     }
 
     private var gainRow: some View {
@@ -729,7 +773,7 @@ struct LevelCardContent: View {
             HStack(spacing: 8) {
                 SectionCaption(title: l10n.t("vu_meter_header"), systemImage: "waveform")
                 Spacer()
-                if isStreaming { ReceivedBytesText(meter: meter) }
+                if isStreaming { ReceivedBytesText(meter: meter, helpText: l10n.t("stats_received")) }
                 LiveLevelReadout(meter: meter, l10n: l10n, active: isStreaming && !isMuted)
             }
             LiveLevelBar(meter: meter, active: isStreaming && !isMuted)
@@ -782,7 +826,7 @@ struct LiveLevelBar: View {
                          with: .color(Color.primary.opacity(0.18)))
             }
         }
-        .frame(height: 8)
+        .frame(height: 10)
         .accessibilityHidden(true)
     }
 }
@@ -792,7 +836,7 @@ struct LevelScale: View {
         GeometryReader { geo in
             ForEach(meterScaleMarks, id: \.self) { db in
                 Text(db == 0 ? "0" : "\(db)")
-                    .font(.system(size: 8.5, design: .monospaced))
+                    .font(.system(size: 9, design: .monospaced))
                     .foregroundColor(.secondary.opacity(0.8))
                     .fixedSize()
                     .position(x: min(max(geo.size.width * CGFloat(Float(db) / AudioEngine.meterFloorDB * -1 + 1) , 8), geo.size.width - 6),
@@ -819,12 +863,13 @@ struct LiveLevelReadout: View {
 
 struct ReceivedBytesText: View {
     @ObservedObject var meter: MeterModel
+    let helpText: String
 
     var body: some View {
         let bytes = Double(meter.bytes)
         Text(bytes >= 1024 * 1024 ? String(format: "%.1f MB", bytes / 1_048_576) : String(format: "%.0f KB", bytes / 1024))
             .font(.system(size: 10.5, design: .monospaced))
             .foregroundColor(.secondary.opacity(0.75))
-            .help("已接收")
+            .help(helpText)
     }
 }
