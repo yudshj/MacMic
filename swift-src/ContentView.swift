@@ -8,7 +8,7 @@ enum MacMicStyle {
     static let cardPadding: CGFloat = 12
     static let sectionSpacing: CGFloat = 10
     static let windowWidth: CGFloat = 372
-    static let windowHeight: CGFloat = 600
+    static let windowHeight: CGFloat = 790
 }
 
 /// Grouped-form style card (like System Settings): subtle raised surface with a hairline border.
@@ -47,6 +47,91 @@ struct SectionCaption: View {
             .font(.system(size: 11, weight: .semibold))
             .foregroundColor(.secondary)
             .labelStyle(.titleAndIcon)
+    }
+}
+
+/// Single-line input field look shared by the IP field and the ADB device selector:
+/// icon · content · trailing icon button, on a text-field background.
+struct FieldContainer<Content: View>: View {
+    var disabled: Bool = false
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(spacing: 6) {
+            content()
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 4)
+        .frame(height: 30)
+        .background(
+            RoundedRectangle(cornerRadius: MacMicStyle.innerRadius, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor).opacity(disabled ? 0.45 : 0.9))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: MacMicStyle.innerRadius, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+        )
+    }
+}
+
+/// Small borderless icon button that lives inside a `FieldContainer`.
+struct FieldIconButton: View {
+    let systemImage: String
+    let help: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+                .frame(width: 24, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color.primary.opacity(hovering ? 0.08 : 0))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+        .accessibilityLabel(Text(help))
+    }
+}
+
+/// One line of secondary explanatory text under a field.
+struct FieldFootnote: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10.5))
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .padding(.leading, 2)
+            .help(text)
+    }
+}
+
+/// "Pixel 11 Pro Fold   USB · 66301FDDJ003EY" — model emphasised, transport/serial secondary.
+struct ADBDeviceLabel: View {
+    let device: ADBDevice
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(device.model.isEmpty ? device.serial : device.model.replacingOccurrences(of: "_", with: " "))
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+            Text(device.model.isEmpty ? (device.isWireless ? "Wi-Fi" : "USB")
+                                      : "\(device.isWireless ? "Wi-Fi" : "USB") · \(device.serial)")
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
     }
 }
 
@@ -204,12 +289,9 @@ struct StatusHeaderView: View {
             }
             .frame(width: 46, height: 46)
             // Subtle live "pulse" ring driven by the audio level while streaming.
-            .overlay(
-                Circle()
-                    .stroke(Color.green.opacity(vm.isStreaming ? 0.45 : 0), lineWidth: 2)
-                    .scaleEffect(1.0 + CGFloat(vm.isStreaming ? vm.vuLevel : 0) * 0.22)
-                    .animation(.easeOut(duration: 0.12), value: vm.vuLevel)
-            )
+            // Isolated view observing only the meter, and no implicit animation, so a level
+            // change re-renders one circle instead of animating the whole header every frame.
+            .overlay(PulseRing(meter: vm.meter, active: vm.isStreaming))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -237,6 +319,17 @@ struct StatusHeaderView: View {
     }
 }
 
+struct PulseRing: View {
+    @ObservedObject var meter: MeterModel
+    let active: Bool
+
+    var body: some View {
+        Circle()
+            .stroke(Color.green.opacity(active ? 0.45 : 0), lineWidth: 2)
+            .scaleEffect(1.0 + CGFloat(active ? meter.level : 0) * 0.22)
+    }
+}
+
 private extension ConnectionState {
     var isError: Bool {
         if case .error = self { return true }
@@ -246,48 +339,6 @@ private extension ConnectionState {
 
 // MARK: - Level Meter
 
-struct SegmentedLevelMeter: View {
-    let level: Float
-    let active: Bool
-    var segments: Int = 28
-
-    @State private var peak: Float = 0
-    @State private var peakTime: Date = .distantPast
-
-    private func color(for index: Int) -> Color {
-        let pos = Double(index) / Double(segments)
-        if pos >= 0.88 { return .red }        // > ~ -6 dBFS
-        if pos >= 0.70 { return .yellow }     // > ~ -15 dBFS
-        return .green
-    }
-
-    var body: some View {
-        let lit = active ? Int((Double(level) * Double(segments)).rounded()) : 0
-        let peakIndex = active ? min(segments - 1, Int((Double(peak) * Double(segments)).rounded()) - 1) : -1
-
-        HStack(spacing: 2) {
-            ForEach(0..<segments, id: \.self) { i in
-                let isOn = i < lit
-                let isPeak = i == peakIndex && i >= lit
-                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                    .fill(isOn || isPeak ? color(for: i) : Color.primary.opacity(0.09))
-                    .opacity(isPeak ? 0.75 : 1)
-            }
-        }
-        .frame(height: 12)
-        .animation(.linear(duration: 0.05), value: lit)
-        .onChange(of: level) { newValue in
-            let now = Date()
-            if newValue >= peak {
-                peak = newValue
-                peakTime = now
-            } else if now.timeIntervalSince(peakTime) > 0.9 {
-                peak = max(newValue, peak - 0.04)
-            }
-        }
-        .accessibilityHidden(true)
-    }
-}
 
 // MARK: - Content View
 
@@ -315,6 +366,7 @@ public struct ContentView: View {
             StatusHeaderView(vm: vm, l10n: l10n)
             transportCard
             audioCard
+            denoiseCard
             levelCard
             Spacer(minLength: 0)
             connectButton
@@ -380,7 +432,7 @@ public struct ContentView: View {
 
             if vm.selectedTransport == .usb {
                 adbDevicePicker
-                HintRow(systemImage: "cable.connector", text: l10n.t("usb_hint"))
+                FieldFootnote(text: l10n.t("usb_hint"))
             } else {
                 ipField
             }
@@ -389,11 +441,12 @@ public struct ContentView: View {
     }
 
     private var adbDevicePicker: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "smartphone")
-                .font(.system(size: 12))
+        let selected = vm.adbDevices.first(where: { $0.serial == vm.selectedADBSerial })
+        return FieldContainer(disabled: vm.isStreaming) {
+            Image(systemName: selected?.isWireless == true ? "wifi" : "cable.connector")
+                .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.secondary)
-                .frame(width: 16)
+                .frame(width: 18)
 
             if vm.adbDevices.isEmpty {
                 Text(l10n.t("adb_no_devices"))
@@ -401,56 +454,54 @@ public struct ContentView: View {
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                Picker("", selection: $vm.selectedADBSerial) {
+                Menu {
                     ForEach(vm.adbDevices) { dev in
-                        Text(dev.displayName).tag(dev.serial)
+                        Button {
+                            vm.selectedADBSerial = dev.serial
+                        } label: {
+                            if dev.serial == vm.selectedADBSerial {
+                                Label(dev.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(dev.displayName)
+                            }
+                        }
                     }
+                } label: {
+                    ADBDeviceLabel(device: selected ?? vm.adbDevices[0])
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.visible)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .disabled(vm.isStreaming)
                 .accessibilityLabel(Text(l10n.t("adb_device_label")))
             }
 
-            Button(action: { vm.refreshADBDevices() }) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .semibold))
+            FieldIconButton(systemImage: "arrow.clockwise", help: l10n.t("adb_refresh")) {
+                vm.refreshADBDevices()
             }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-            .focusable(false)
             .disabled(vm.isStreaming)
-            .help(l10n.t("adb_refresh"))
-            .accessibilityLabel(Text(l10n.t("adb_refresh")))
         }
     }
 
     private var ipField: some View {
-        HStack(spacing: 6) {
+        FieldContainer(disabled: vm.isStreaming) {
             Image(systemName: "iphone")
-                .font(.system(size: 12))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.secondary)
-                .padding(.leading, 8)
+                .frame(width: 18)
 
             TextField(l10n.t("phone_ip_placeholder"), text: $vm.host)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(size: 12.5, design: .monospaced))
                 .disabled(vm.isStreaming)
-                .padding(.vertical, 6)
                 .accessibilityLabel(Text(l10n.t("phone_ip_label")))
 
             if !vm.ipHistory.isEmpty {
-                Button(action: { vm.showHistoryPopover.toggle() }) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(width: 26, height: 22)
-                        .contentShape(Rectangle())
+                FieldIconButton(systemImage: "clock.arrow.circlepath", help: l10n.t("history_ips")) {
+                    vm.showHistoryPopover.toggle()
                 }
-                .buttonStyle(.plain)
                 .disabled(vm.isStreaming)
-                .help(l10n.t("history_ips"))
                 .popover(isPresented: $vm.showHistoryPopover, arrowEdge: .bottom) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(l10n.t("history_ips"))
@@ -467,17 +518,8 @@ public struct ContentView: View {
                     .padding(.bottom, 6)
                     .frame(minWidth: 210)
                 }
-                .padding(.trailing, 3)
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: MacMicStyle.innerRadius, style: .continuous)
-                .fill(Color(nsColor: .textBackgroundColor).opacity(vm.isStreaming ? 0.5 : 1))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: MacMicStyle.innerRadius, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-        )
     }
 
     // MARK: Audio output + gain
@@ -535,6 +577,58 @@ public struct ContentView: View {
         .macMicCard()
     }
 
+    // MARK: Denoise
+
+    private var denoiseCard: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                SectionCaption(title: l10n.t("denoise_header"), systemImage: "waveform.badge.minus")
+                Spacer()
+                Toggle("", isOn: $vm.denoiseEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .accessibilityLabel(Text(l10n.t("denoise_header")))
+            }
+
+            if vm.denoiseEnabled {
+                Picker("", selection: $vm.denoiseMode) {
+                    Text(l10n.t("denoise_mode_rnnoise")).tag(DenoiseMode.rnnoise)
+                    Text(l10n.t("denoise_mode_apple")).tag(DenoiseMode.appleVoiceIsolation)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .disabled(!vm.isAppleVoiceIsolationAvailable)
+                .help(vm.isAppleVoiceIsolationAvailable ? "" : l10n.t("denoise_apple_unavailable"))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(l10n.t("denoise_strength"))
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("\(Int(vm.denoiseStrength))%")
+                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    }
+                    Slider(value: $vm.denoiseStrength, in: 0...100, step: 5)
+                        .controlSize(.small)
+                        .accessibilityLabel(Text(l10n.t("denoise_strength")))
+                }
+
+                HStack(spacing: 5) {
+                    Image(systemName: "clock")
+                    Text(vm.denoiseMode == .rnnoise ? l10n.t("denoise_info_rnnoise") : l10n.t("denoise_info_apple"))
+                }
+                .font(.system(size: 10.5))
+                .foregroundColor(.secondary)
+
+                HintRow(systemImage: "info.circle", text: l10n.t("denoise_stack_hint"))
+            }
+        }
+        .macMicCard()
+        .animation(.easeInOut(duration: 0.15), value: vm.denoiseEnabled)
+    }
+
     private var gainRow: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -584,58 +678,12 @@ public struct ContentView: View {
 
     // MARK: Level meter + stats
 
-    private var levelText: String {
-        guard vm.isStreaming, vm.vuLevel > 0.001 else { return l10n.t("level_idle") }
-        let db = Double(vm.vuLevel) * 50.0 - 50.0
-        return String(format: "%.0f dB", db)
-    }
-
-    private var kbText: String {
-        let bytes = Double(vm.bytesReceived)
-        if bytes >= 1024 * 1024 {
-            return String(format: "%.1f MB", bytes / (1024 * 1024))
-        }
-        return String(format: "%.0f KB", bytes / 1024)
-    }
-
     private var levelCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                SectionCaption(title: l10n.t("vu_meter_header"), systemImage: "waveform")
-                Spacer()
-                Text(levelText)
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                    .foregroundColor(.secondary)
-            }
-
-            SegmentedLevelMeter(level: vm.isMuted ? 0 : vm.vuLevel, active: vm.isStreaming)
-
-            if vm.isStreaming {
-                HStack(spacing: 14) {
-                    statItem(icon: "shippingbox", label: l10n.t("stats_packets"), value: "\(vm.packetsReceived)")
-                    statItem(icon: "arrow.down.circle", label: l10n.t("stats_received"), value: kbText)
-                    Spacer(minLength: 0)
-                }
-                .transition(.opacity)
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: vm.isStreaming)
-        .macMicCard()
+        LevelCardContent(meter: vm.meter, l10n: l10n, isStreaming: vm.isStreaming, isMuted: vm.isMuted)
+            .animation(.easeInOut(duration: 0.2), value: vm.isStreaming)
+            .macMicCard()
     }
 
-    private func statItem(icon: String, label: String, value: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-            Text(label)
-                .font(.system(size: 10.5))
-                .foregroundColor(.secondary)
-            Text(value)
-                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                .foregroundColor(.primary)
-        }
-    }
 
     // MARK: Primary action
 
@@ -665,5 +713,118 @@ public struct ContentView: View {
                 .controlSize(.large)
                 .accessibilityLabel(Text(connectTitle))
         }
+    }
+}
+
+/// Level card. Static chrome lives here; only the small `LiveLevelBar` / `LiveLevelReadout`
+/// subviews observe the meter, so a meter tick redraws one Canvas and (≤4×/s) one Text.
+struct LevelCardContent: View {
+    let meter: MeterModel
+    @ObservedObject var l10n: LocalizationManager
+    let isStreaming: Bool
+    let isMuted: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                SectionCaption(title: l10n.t("vu_meter_header"), systemImage: "waveform")
+                Spacer()
+                if isStreaming { ReceivedBytesText(meter: meter) }
+                LiveLevelReadout(meter: meter, l10n: l10n, active: isStreaming && !isMuted)
+            }
+            LiveLevelBar(meter: meter, active: isStreaming && !isMuted)
+            LevelScale()
+        }
+    }
+}
+
+/// dBFS positions shown under the bar (meter spans -60...0 dBFS).
+private let meterScaleMarks: [Int] = [-60, -40, -20, -12, -6, 0]
+
+struct LiveLevelBar: View {
+    @ObservedObject var meter: MeterModel
+    let active: Bool
+
+    private static func x(_ db: Float, _ width: CGFloat) -> CGFloat {
+        width * CGFloat((db - AudioEngine.meterFloorDB) / -AudioEngine.meterFloorDB)
+    }
+
+    var body: some View {
+        let level = active ? meter.reading.level : 0
+        let peak = active ? meter.reading.peak : 0
+        Canvas { ctx, size in
+            let track = Path(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: size.height / 2)
+            ctx.fill(track, with: .color(Color.primary.opacity(0.08)))
+            ctx.clip(to: track)
+
+            if level > 0 {
+                // Colour zones by absolute dBFS: green < -12, yellow -12...-6, red > -6.
+                let w = size.width
+                let gradient = Gradient(stops: [
+                    .init(color: .green, location: 0),
+                    .init(color: .green, location: Self.x(-14, w) / w),
+                    .init(color: .yellow, location: Self.x(-9, w) / w),
+                    .init(color: .orange, location: Self.x(-5, w) / w),
+                    .init(color: .red, location: 1),
+                ])
+                ctx.fill(Path(CGRect(x: 0, y: 0, width: w * CGFloat(level), height: size.height)),
+                         with: .linearGradient(gradient, startPoint: .zero, endPoint: CGPoint(x: w, y: 0)))
+            }
+            if peak > 0.01 {
+                let px = max(1.5, size.width * CGFloat(peak) - 1.5)
+                let color: Color = peak > 0.9 ? .red : (peak > 0.8 ? .yellow : Color.primary.opacity(0.7))
+                ctx.fill(Path(CGRect(x: px - 1, y: 0, width: 2, height: size.height)), with: .color(color))
+            }
+            // Faint ticks at the scale marks.
+            for db in meterScaleMarks.dropFirst().dropLast() {
+                let tx = Self.x(Float(db), size.width)
+                ctx.fill(Path(CGRect(x: tx, y: 0, width: 0.5, height: size.height)),
+                         with: .color(Color.primary.opacity(0.18)))
+            }
+        }
+        .frame(height: 8)
+        .accessibilityHidden(true)
+    }
+}
+
+struct LevelScale: View {
+    var body: some View {
+        GeometryReader { geo in
+            ForEach(meterScaleMarks, id: \.self) { db in
+                Text(db == 0 ? "0" : "\(db)")
+                    .font(.system(size: 8.5, design: .monospaced))
+                    .foregroundColor(.secondary.opacity(0.8))
+                    .fixedSize()
+                    .position(x: min(max(geo.size.width * CGFloat(Float(db) / AudioEngine.meterFloorDB * -1 + 1) , 8), geo.size.width - 6),
+                              y: geo.size.height / 2)
+            }
+        }
+        .frame(height: 10)
+        .accessibilityHidden(true)
+    }
+}
+
+struct LiveLevelReadout: View {
+    @ObservedObject var meter: MeterModel
+    @ObservedObject var l10n: LocalizationManager
+    let active: Bool
+
+    var body: some View {
+        Text(active ? (meter.readoutDB.map { "\($0) dBFS" } ?? l10n.t("level_idle")) : l10n.t("level_idle"))
+            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+            .foregroundColor(.secondary)
+            .frame(minWidth: 64, alignment: .trailing)
+    }
+}
+
+struct ReceivedBytesText: View {
+    @ObservedObject var meter: MeterModel
+
+    var body: some View {
+        let bytes = Double(meter.bytes)
+        Text(bytes >= 1024 * 1024 ? String(format: "%.1f MB", bytes / 1_048_576) : String(format: "%.0f KB", bytes / 1024))
+            .font(.system(size: 10.5, design: .monospaced))
+            .foregroundColor(.secondary.opacity(0.75))
+            .help("已接收")
     }
 }

@@ -208,9 +208,14 @@ public final class MacMicClient: ObservableObject {
             sendUDPPing()
         }
 
-        // 4. Start Audio Engine
-        DispatchQueue.main.async {
-            self.audioEngine.start()
+        // 4. Start Audio Engine (off the main thread; a wedged output driver must not freeze the UI)
+        audioEngine.start { [weak self] ok in
+            guard let self = self, !ok else { return }
+            NSLog("[MacMic] Output device did not start within \(AudioEngine.startTimeout)s")
+            self.disconnect()
+            DispatchQueue.main.async {
+                self.state = .error("输出设备无响应（BlackHole 可能卡住），请重启音频服务：sudo killall coreaudiod")
+            }
         }
 
         // 5. Start Keepalive Heartbeat Loop (TCP 0x69 every 2s + UDP Ping)
@@ -405,7 +410,7 @@ public final class MacMicClient: ObservableObject {
         totalBytesCount += bytes
 
         let now = CACurrentMediaTime()
-        if now - lastStatsUpdate >= 0.15 {
+        if now - lastStatsUpdate >= 0.5 {
             lastStatsUpdate = now
             let pkts = totalPktsCount
             let b = totalBytesCount
@@ -430,8 +435,8 @@ public final class MacMicClient: ObservableObject {
             close(udpSocketFd)
             udpSocketFd = -1
         }
+        audioEngine.stop()
         DispatchQueue.main.async {
-            self.audioEngine.stop()
             self.state = .disconnected
         }
     }

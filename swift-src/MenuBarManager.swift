@@ -182,11 +182,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
     }
 
     @objc public func openPanelClicked() {
-        NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApplication.shared.windows.first(where: { $0.title != "Settings" }) {
-            window.makeKeyAndOrderFront(nil)
-            window.orderFrontRegardless()
-        }
+        AppDelegate.shared?.showMainWindow()
     }
 
     @objc private func openSettingsClicked() {

@@ -101,11 +101,18 @@ public final class VoiceDSPProcessor {
 }
 
 public final class AudioEngine: ObservableObject {
+    /// Meter values, normalised 0...1 over -60...0 dBFS (see `AudioEngine.meterFloorDB`).
+    /// Ballistics are computed on the audio thread; published at ~15 Hz.
     @Published public var vuLevel: Float = 0.0
+    @Published public var vuPeak: Float = 0.0
+    public static let meterFloorDB: Float = -60
     @Published public var gain: Float = 1.0 // 0.0 to 2.0 (1.0 = 100% standard calibrated volume)
     @Published public var isMuted: Bool = false
 
     public let dsp = VoiceDSPProcessor()
+
+    /// Speech denoiser applied to the mono phone stream before it is queued for playback.
+    public let denoiser = DenoiseProcessor()
 
     private var audioQueue: AudioQueueRef?
     private var buffers: [AudioQueueBufferRef] = []
@@ -113,11 +120,26 @@ public final class AudioEngine: ObservableObject {
     // 20ms at 48000Hz Stereo (2 ch * 2 bytes * 960 frames = 3840 bytes)
     private let bufferSize: UInt32 = 960 * 2 * 2
     private var isRunning = false
-    private let lock = NSLock()
-    private var pcmQueue: [Data] = []
-    private var prebufferCount = 0
-    private let targetPrebuffer = 2 // Cushion 2 packets (40ms) to eliminate network jitter stutter
     private var lastVUUpdate: CFTimeInterval = 0
+    // Meter ballistics state (audio thread only)
+    private var meterLevelDB: Float = -100
+    private var meterPeakDB: Float = -100
+    private var meterPeakHoldUntil: CFTimeInterval = 0
+
+    // Jitter buffer: preallocated ring of interleaved stereo Int16 frames.
+    // Writer = network/decoder worker thread, reader = AudioQueue callback.
+    private let ring = StereoRingBuffer(capacityFrames: 48000)   // 1 s
+    /// Start (and re-start after an underrun) only once this much audio is buffered.
+    private let primeFrames = 960 * 2                            // 40 ms
+    /// If network bursts push buffered audio above this, trim the oldest audio...
+    private let maxBufferedFrames = 48000 / 5                    // 200 ms
+    /// ...down to this, so latency can't creep up. Trims are rare single events instead of
+    /// the old "drop 10 packets whenever > 50 are queued" behaviour.
+    private let trimToFrames = 48000 * 8 / 100                   // 80 ms
+
+    // Scratch buffers for the worker thread (grown on demand, reused across packets).
+    private var monoFloat: [Float] = []
+    private var stereoScratch: [Int16] = []
 
     public var currentDevice: AudioDevice?
 
@@ -126,13 +148,40 @@ public final class AudioEngine: ObservableObject {
     }
 
     deinit {
-        stop()
+        stopSync()
     }
 
-    public func start(device: AudioDevice? = nil) {
-        stop()
+    /// AudioQueue start/stop talk to coreaudiod synchronously and can block indefinitely if a
+    /// HAL driver wedges (observed with BlackHole: AudioQueueStart never returned). They run on
+    /// this queue so the UI never freezes; `start` reports a hang through its completion.
+    private let controlQueue = DispatchQueue(label: "com.macmic.audio.control", qos: .userInitiated)
+    public static let startTimeout: TimeInterval = 3
+
+    /// Starts playback asynchronously. `completion(true)` once running, `completion(false)` if
+    /// the output device did not respond within `startTimeout` (called on the main queue, once).
+    public func start(device: AudioDevice? = nil, completion: ((Bool) -> Void)? = nil) {
+        let lock = NSLock()
+        var reported = false
+        let report: (Bool) -> Void = { ok in
+            lock.lock(); let first = !reported; reported = true; lock.unlock()
+            if first, let completion = completion { DispatchQueue.main.async { completion(ok) } }
+        }
+        controlQueue.async { [weak self] in
+            self?.startSync(device: device)
+            report(true)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.startTimeout) { report(false) }
+    }
+
+    public func stop() {
+        controlQueue.async { [weak self] in self?.stopSync() }
+    }
+
+    private func startSync(device: AudioDevice? = nil) {
+        stopSync()
         dsp.reset()
-        prebufferCount = 0
+        ring.reset(primeFrames: primeFrames)
+        denoiser.requestReset()
 
         if let dev = device {
             self.currentDevice = dev
@@ -195,7 +244,7 @@ public final class AudioEngine: ObservableObject {
         isRunning = true
     }
 
-    public func stop() {
+    private func stopSync() {
         isRunning = false
         if let queue = audioQueue {
             AudioQueueStop(queue, true)
@@ -203,40 +252,43 @@ public final class AudioEngine: ObservableObject {
             audioQueue = nil
         }
         buffers.removeAll()
-        lock.lock()
-        pcmQueue.removeAll()
-        prebufferCount = 0
-        lock.unlock()
+        ring.reset(primeFrames: primeFrames)
+        meterLevelDB = -100; meterPeakDB = -100
         DispatchQueue.main.async {
             self.vuLevel = 0.0
+            self.vuPeak = 0.0
         }
     }
 
+    /// Called on the network/decoder worker thread with one decoded mono Int16 packet.
     public func writePCM(monoData: Data) {
         guard isRunning else { return }
-        // Convert Mono 16-bit to Stereo 16-bit (L=R)
         let sampleCount = monoData.count / MemoryLayout<Int16>.size
-        var stereoData = Data(count: sampleCount * 2 * MemoryLayout<Int16>.size)
+        guard sampleCount > 0 else { return }
+        if monoFloat.count < sampleCount { monoFloat = [Float](repeating: 0, count: sampleCount) }
+        if stereoScratch.count < sampleCount * 2 { stereoScratch = [Int16](repeating: 0, count: sampleCount * 2) }
 
-        stereoData.withUnsafeMutableBytes { dstRaw in
-            guard let dst = dstRaw.baseAddress?.assumingMemoryBound(to: Int16.self) else { return }
-            monoData.withUnsafeBytes { srcRaw in
-                guard let src = srcRaw.baseAddress?.assumingMemoryBound(to: Int16.self) else { return }
+        monoFloat.withUnsafeMutableBufferPointer { mono in
+            let m = mono.baseAddress!
+            monoData.withUnsafeBytes { raw in
+                let src = raw.bindMemory(to: Int16.self)
+                for i in 0..<sampleCount { m[i] = Float(src[i]) }
+            }
+
+            // Denoise (no-op and zero-latency while disabled). Runs here, not on the render thread.
+            denoiser.process(m, count: sampleCount)
+
+            // Mono → stereo Int16 (L = R)
+            stereoScratch.withUnsafeMutableBufferPointer { st in
+                let d = st.baseAddress!
                 for i in 0..<sampleCount {
-                    let s = src[i]
-                    dst[i * 2] = s
-                    dst[i * 2 + 1] = s
+                    let v = Int16(max(-32768, min(32767, m[i].rounded())))
+                    d[i * 2] = v
+                    d[i * 2 + 1] = v
                 }
+                ring.write(d, frames: sampleCount, maxBufferedFrames: maxBufferedFrames, trimToFrames: trimToFrames)
             }
         }
-
-        lock.lock()
-        if pcmQueue.count > 50 {
-            pcmQueue.removeFirst(10)
-        }
-        pcmQueue.append(stereoData)
-        prebufferCount += 1
-        lock.unlock()
     }
 
     private func handleAudioQueueOutput(queue: AudioQueueRef, buffer: AudioQueueBufferRef) {
@@ -247,30 +299,14 @@ public final class AudioEngine: ObservableObject {
             return
         }
 
-        var filledBytes: Int = 0
-        let dest = buffer.pointee.mAudioData.assumingMemoryBound(to: UInt8.self)
-
-        lock.lock()
-        // Wait for prebuffer on initial start to avoid glitch
-        if prebufferCount >= targetPrebuffer || !pcmQueue.isEmpty {
-            while filledBytes < Int(bufferSize) && !pcmQueue.isEmpty {
-                let chunk = pcmQueue.removeFirst()
-                let needed = Int(bufferSize) - filledBytes
-                let toCopy = min(chunk.count, needed)
-                _ = chunk.withUnsafeBytes { rawPtr in
-                    memcpy(dest.advanced(by: filledBytes), rawPtr.baseAddress!, toCopy)
-                }
-                filledBytes += toCopy
-                if toCopy < chunk.count {
-                    let remaining = chunk.subdata(in: toCopy..<chunk.count)
-                    pcmQueue.insert(remaining, at: 0)
-                }
-            }
-        }
-        lock.unlock()
+        let framesWanted = Int(bufferSize) / 4
+        let dest = buffer.pointee.mAudioData.assumingMemoryBound(to: Int16.self)
+        // Reads whatever is available (0 while priming), zero-fills the rest.
+        let framesRead = ring.read(dest, frames: framesWanted, primeFrames: primeFrames)
+        let filledBytes = framesRead * 4
 
         if filledBytes < Int(bufferSize) {
-            memset(dest.advanced(by: filledBytes), 0, Int(bufferSize) - filledBytes)
+            memset(buffer.pointee.mAudioData.advanced(by: filledBytes), 0, Int(bufferSize) - filledBytes)
         }
         buffer.pointee.mAudioDataByteSize = bufferSize
 
@@ -278,25 +314,127 @@ public final class AudioEngine: ObservableObject {
         let samples = buffer.pointee.mAudioData.assumingMemoryBound(to: Int16.self)
         let totalSamples = Int(bufferSize) / MemoryLayout<Int16>.size
 
-        let (_, rms) = dsp.process(
+        let (peak, rms) = dsp.process(
             stereoBuffer: samples,
             sampleCount: totalSamples,
             userGain: self.gain,
             isMuted: self.isMuted
         )
-
-        // Convert to dB, then normalize to 0.0 - 1.0 range
-        let db = rms > 0 ? 20 * log10(rms) : -100.0
-        let normalized = max(0.0, min(1.0, (db + 50.0) / 50.0))
-
-        let now = CACurrentMediaTime()
-        if now - lastVUUpdate >= 0.04 {
-            lastVUUpdate = now
-            DispatchQueue.main.async {
-                self.vuLevel = Float(normalized)
-            }
-        }
+        updateMeter(peak: peak, rms: rms, bufferSeconds: Float(totalSamples / 2) / 48000)
 
         AudioQueueEnqueueBuffer(queue, buffer, 0, nil)
+    }
+}
+
+extension AudioEngine {
+    /// PPM-style ballistics: instant attack, 24 dB/s release for the level bar;
+    /// the peak marker holds for 1 s, then falls at 12 dB/s.
+    fileprivate func updateMeter(peak: Float, rms: Float, bufferSeconds: Float) {
+        let rmsDB = rms > 0 ? 20 * log10(rms) : -100
+        let peakDB = peak > 0 ? 20 * log10(peak) : -100
+        meterLevelDB = max(rmsDB, meterLevelDB - 24 * bufferSeconds)
+
+        let now = CACurrentMediaTime()
+        if peakDB >= meterPeakDB {
+            meterPeakDB = peakDB
+            meterPeakHoldUntil = now + 1.0
+        } else if now > meterPeakHoldUntil {
+            meterPeakDB = max(peakDB, meterPeakDB - 12 * bufferSeconds)
+        }
+
+        guard now - lastVUUpdate >= 0.066 else { return }   // ~15 Hz is plenty for a meter
+        lastVUUpdate = now
+        let floor = Self.meterFloorDB
+        let level = max(0, min(1, (meterLevelDB - floor) / -floor))
+        let peakNorm = max(0, min(1, (meterPeakDB - floor) / -floor))
+        DispatchQueue.main.async {
+            self.vuLevel = level
+            self.vuPeak = peakNorm
+        }
+    }
+}
+
+/// Preallocated single-producer / single-consumer ring of interleaved stereo Int16 frames.
+/// Guarded by an os_unfair_lock held only for the memcpy (no allocation, no Data churn).
+final class StereoRingBuffer {
+    private let capacity: Int            // frames
+    private let storage: UnsafeMutablePointer<Int16>
+    private var readPos = 0              // frames
+    private var count = 0                // frames buffered
+    private var primed = false
+    private var lock = os_unfair_lock()
+
+    /// Diagnostics.
+    private(set) var underruns = 0
+    private(set) var trims = 0
+
+    init(capacityFrames: Int) {
+        capacity = capacityFrames
+        storage = .allocate(capacity: capacityFrames * 2)
+        storage.initialize(repeating: 0, count: capacityFrames * 2)
+    }
+
+    deinit { storage.deallocate() }
+
+    func reset(primeFrames: Int) {
+        os_unfair_lock_lock(&lock)
+        readPos = 0; count = 0; primed = false
+        os_unfair_lock_unlock(&lock)
+    }
+
+    var bufferedFrames: Int {
+        os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }
+        return count
+    }
+
+    func write(_ src: UnsafePointer<Int16>, frames: Int, maxBufferedFrames: Int, trimToFrames: Int) {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        var frames = frames
+        var src = src
+        if frames > capacity {                       // absurdly large packet: keep the newest part
+            src = src.advanced(by: (frames - capacity) * 2)
+            frames = capacity
+        }
+        // Latency cap: drop the oldest audio once, down to the trim target.
+        if count + frames > maxBufferedFrames {
+            let drop = min(count, count + frames - trimToFrames)
+            if drop > 0 {
+                readPos = (readPos + drop) % capacity
+                count -= drop
+                trims += 1
+            }
+        }
+        let writePos = (readPos + count) % capacity
+        let first = min(frames, capacity - writePos)
+        (storage + writePos * 2).update(from: src, count: first * 2)
+        if first < frames {
+            storage.update(from: src + first * 2, count: (frames - first) * 2)
+        }
+        count += frames
+    }
+
+    /// Returns frames copied into `dst` (≤ frames). Holds output while (re)priming.
+    func read(_ dst: UnsafeMutablePointer<Int16>, frames: Int, primeFrames: Int) -> Int {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        if !primed {
+            guard count >= primeFrames else { return 0 }
+            primed = true
+        }
+        let n = min(frames, count)
+        let first = min(n, capacity - readPos)
+        dst.update(from: storage + readPos * 2, count: first * 2)
+        if first < n {
+            (dst + first * 2).update(from: storage, count: (n - first) * 2)
+        }
+        readPos = (readPos + n) % capacity
+        count -= n
+        if n < frames {
+            // Underrun: wait for a fresh cushion instead of crackling packet-by-packet.
+            primed = false
+            underruns += 1
+        }
+        return n
     }
 }

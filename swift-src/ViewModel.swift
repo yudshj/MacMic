@@ -1,11 +1,12 @@
 import Foundation
 import SwiftUI
+import AppKit
 import Combine
 import AVFoundation
 
 public enum TransportMode: String, CaseIterable, Identifiable {
-    case wifi = "Wi-Fi"
     case usb = "USB (ADB)"
+    case wifi = "Wi-Fi"
     case wifiDirect = "Wi-Fi Direct"
 
     public var id: String { rawValue }
@@ -37,8 +38,9 @@ public final class AppViewModel: ObservableObject {
     }
     @Published public var ipHistory: [String] = []
 
-    @Published public var selectedTransport: TransportMode = .wifi {
+    @Published public var selectedTransport: TransportMode = .usb {
         didSet {
+            UserDefaults.standard.set(selectedTransport.rawValue, forKey: "macmic_transport")
             if selectedTransport == .usb {
                 host = "127.0.0.1"
                 refreshADBDevices()
@@ -60,6 +62,35 @@ public final class AppViewModel: ObservableObject {
             audioEngine.gain = Float(gainValue / 100.0)
         }
     }
+    // MARK: Denoise (persisted)
+    @Published public var denoiseEnabled: Bool {
+        didSet { UserDefaults.standard.set(denoiseEnabled, forKey: "macmic_denoise_enabled"); pushDenoiseConfig() }
+    }
+    @Published public var denoiseMode: DenoiseMode {
+        didSet { UserDefaults.standard.set(denoiseMode.rawValue, forKey: "macmic_denoise_mode"); pushDenoiseConfig() }
+    }
+    /// 0...100 %, wet/dry mix against the latency-aligned original.
+    @Published public var denoiseStrength: Double {
+        didSet { UserDefaults.standard.set(denoiseStrength, forKey: "macmic_denoise_strength"); pushDenoiseConfig() }
+    }
+    public let isAppleVoiceIsolationAvailable = DenoiseProcessor.isAppleVoiceIsolationAvailable
+
+    /// Approximate extra latency of the selected denoiser, for display.
+    public var denoiseLatencyMs: Int {
+        guard denoiseEnabled else { return 0 }
+        switch denoiseMode {
+        case .rnnoise: return 20
+        case .appleVoiceIsolation: return 56
+        }
+    }
+
+    private func pushDenoiseConfig() {
+        audioEngine.denoiser.setConfig(DenoiseConfig(
+            enabled: denoiseEnabled,
+            mode: denoiseMode,
+            strength: Float(denoiseStrength / 100.0)))
+    }
+
     @Published public var isMuted: Bool = false {
         didSet {
             audioEngine.isMuted = isMuted
@@ -71,10 +102,9 @@ public final class AppViewModel: ObservableObject {
     @Published public var showSettings: Bool = false
     @Published public var showHistoryPopover: Bool = false
 
-    // Direct published bindings for SwiftUI UI responsiveness
-    @Published public var vuLevel: Float = 0.0
-    @Published public var packetsReceived: Int = 0
-    @Published public var bytesReceived: Int = 0
+    /// High-frequency meter data lives in its own object so only the meter views re-render,
+    /// not the whole window (pickers, cards...) many times per second.
+    public let meter = MeterModel()
     @Published public var connectionState: ConnectionState = .disconnected
 
     public let audioEngine: AudioEngine
@@ -88,6 +118,12 @@ public final class AppViewModel: ObservableObject {
         let savedGain = UserDefaults.standard.object(forKey: "macmic_gain") as? Double ?? 100.0
 
         self.host = savedHost
+        // USB (ADB) is the default transport; remember the user's last choice.
+        self.selectedTransport = TransportMode(rawValue: UserDefaults.standard.string(forKey: "macmic_transport") ?? "") ?? .usb
+        let defaults = UserDefaults.standard
+        self.denoiseEnabled = defaults.object(forKey: "macmic_denoise_enabled") as? Bool ?? true
+        self.denoiseMode = DenoiseMode(rawValue: defaults.string(forKey: "macmic_denoise_mode") ?? "") ?? .rnnoise
+        self.denoiseStrength = defaults.object(forKey: "macmic_denoise_strength") as? Double ?? 100.0
         self.selectedADBSerial = UserDefaults.standard.string(forKey: "macmic_adb_serial") ?? ""
         self.ipHistory = savedHistory
         self.gainValue = savedGain
@@ -97,25 +133,43 @@ public final class AppViewModel: ObservableObject {
         self.audioEngine = engine
         self.client = MacMicClient(audioEngine: engine)
 
-        // Bind AudioEngine VU Level directly to AppViewModel
+        // Meter: quantise to the meter's resolution and drop repeats, and stop updating
+        // entirely while the window is hidden / occluded.
+        let meter = self.meter
         engine.$vuLevel
+            .combineLatest(engine.$vuPeak)
+            .map { level, peak in
+                let q = Float(MeterModel.levelSteps)
+                return MeterReading(level: (level * q).rounded() / q, peak: (peak * q).rounded() / q)
+            }
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
-            .assign(to: &$vuLevel)
+            .sink { reading in if meter.isVisible { meter.reading = reading } }
+            .store(in: &cancellables)
 
-        // Bind Client stats and state directly to AppViewModel
-        client.$packetsReceived
-            .receive(on: DispatchQueue.main)
-            .assign(to: &$packetsReceived)
+        // The numeric dB readout changes at most 4×/s so it stays legible.
+        engine.$vuLevel
+            .throttle(for: .milliseconds(250), scheduler: DispatchQueue.main, latest: true)
+            .map { level -> Int? in
+                level <= 0.001 ? nil : Int((level * -AudioEngine.meterFloorDB + AudioEngine.meterFloorDB).rounded())
+            }
+            .removeDuplicates()
+            .sink { db in if meter.isVisible { meter.readoutDB = db } }
+            .store(in: &cancellables)
 
         client.$bytesReceived
-            .receive(on: DispatchQueue.main)
-            .assign(to: &$bytesReceived)
+            .throttle(for: .milliseconds(1000), scheduler: DispatchQueue.main, latest: true)
+            .sink { bytes in if meter.isVisible || bytes == 0 { meter.bytes = bytes } }
+            .store(in: &cancellables)
 
         client.$state
             .receive(on: DispatchQueue.main)
             .assign(to: &$connectionState)
 
         refreshDevices()
+        if selectedTransport == .usb { refreshADBDevices() }
+        if denoiseMode == .appleVoiceIsolation && !isAppleVoiceIsolationAvailable { denoiseMode = .rnnoise }
+        pushDenoiseConfig()
     }
 
     public func saveToHistory(ip: String) {
@@ -228,4 +282,41 @@ public final class AppViewModel: ObservableObject {
             }
         }
     }
+}
+
+/// Live meter values, observed only by the small meter views.
+public final class MeterModel: ObservableObject {
+    /// Meter values are quantised to 1/120 of full scale (0.5 dB) before publishing.
+    public static let levelSteps = 120
+
+    @Published public var reading = MeterReading(level: 0, peak: 0)
+    /// Rounded dBFS for the numeric readout (nil = no signal); updated ≤ 4×/s.
+    @Published public var readoutDB: Int?
+    @Published public var bytes: Int = 0
+
+    public var level: Float { reading.level }
+
+    /// False while every window is occluded/minimised: meter updates are skipped (zero UI cost).
+    public private(set) var isVisible = true
+    private var observers: [NSObjectProtocol] = []
+
+    init() {
+        let center = NotificationCenter.default
+        let update: (Notification) -> Void = { [weak self] _ in self?.refreshVisibility() }
+        observers.append(center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main, using: update))
+        observers.append(center.addObserver(forName: NSApplication.didChangeOcclusionStateNotification, object: nil, queue: .main, using: update))
+    }
+
+    private func refreshVisibility() {
+        let visible = NSApp.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) && !($0 is NSPanel) }
+        if visible != isVisible {
+            isVisible = visible
+            if !visible { reading = MeterReading(level: 0, peak: 0); readoutDB = nil }
+        }
+    }
+}
+
+public struct MeterReading: Equatable {
+    public var level: Float   // 0...1 over -60...0 dBFS
+    public var peak: Float
 }

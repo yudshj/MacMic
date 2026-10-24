@@ -61,3 +61,7 @@ xcuserdata/
 # Agent / AI local instructions
 AGENTS.md
 
+
+# Vendored RNNoise: only the build script, header and licence are committed
+third_party/rnnoise-src/
+third_party/rnnoise/lib/

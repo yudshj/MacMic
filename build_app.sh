@@ -12,13 +12,18 @@ RESOURCES="$CONTENTS/Resources"
 rm -rf "$APP_NAME" MacMic_bin
 mkdir -p "$MACOS" "$RESOURCES"
 
-# 2. Compile Pure Swift Application into arm64 native Mach-O binary
+# 2. Build vendored RNNoise (static, BSD-3) if missing
+./scripts/build_rnnoise.sh
+
+# 3. Compile Pure Swift Application into arm64 native Mach-O binary
 echo "📦 Compiling Swift sources and statically linking libopus.a..."
 swiftc -sdk $(xcrun --show-sdk-path) -target arm64-apple-macos12.0 -parse-as-library -O \
     -I swift-src \
     /opt/homebrew/opt/opus/lib/libopus.a \
+    third_party/rnnoise/lib/librnnoise.a \
     swift-src/OpusDecoder.swift \
     swift-src/AudioDeviceManager.swift \
+    swift-src/Denoiser.swift \
     swift-src/AudioEngine.swift \
     swift-src/ADBHelper.swift \
     swift-src/MacMicClient.swift \
@@ -40,10 +45,10 @@ swiftc -sdk $(xcrun --show-sdk-path) -target arm64-apple-macos12.0 -parse-as-lib
 
 chmod +x "$MACOS/MacMic"
 
-# 3. Copy Icon
+# 4. Copy Icon
 cp AppIcon.icns "$RESOURCES/"
 
-# 4. Generate Info.plist
+# 5. Generate Info.plist
 cat << 'PLIST' > "$CONTENTS/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -81,7 +86,7 @@ cat << 'PLIST' > "$CONTENTS/Info.plist"
 </plist>
 PLIST
 
-# 5. Ad-hoc codesign
+# 6. Ad-hoc codesign
 codesign --force --deep --sign - "$APP_NAME"
 
 echo "🎉 Successfully built pure Swift native $APP_NAME for Apple Silicon!"
