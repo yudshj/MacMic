@@ -30,8 +30,8 @@ MacMic directly implements low-level network communication and CoreAudio pipelin
 
 - **Real-time AI Noise Suppression** (three modes):
   - **Off**: pure bypass, zero latency and zero extra cost.
-  - **RNNoise** (default): xiph's open model, ~20 ms extra latency, ~2% of one CPU core.
-  - **Apple Voice Isolation**: the system `AUSoundIsolation` unit FaceTime uses; stronger, ~56 ms extra latency, no extra install size.
+  - **RNNoise** (default): xiph's open model, ~20 ms extra latency, ~5-6% of one CPU core measured on M5 Pro (whole pipeline included).
+  - **Apple Voice Isolation**: the system `AUSoundIsolation` unit FaceTime uses; stronger and cheaper (~4% CPU), at ~56 ms extra latency, no extra install size.
   - A strength slider mixes the denoised signal with the original; the dry path is delayed to the same length, so there is no comb filtering.
   - All denoising runs on the audio worker thread, never on the real-time render thread.
 - **Three Connection Modes** (USB first / default):
@@ -115,8 +115,18 @@ Or download the installer from the [BlackHole Website](https://existential.audio
 
 ## Noise Suppression Tips
 
-- **Default to RNNoise**: lowest latency and CPU; right for everyday calls and meetings.
-- **Pick Apple Voice Isolation** when you need stronger suppression, e.g. a noisy cafe or loud keyboard. It costs ~56 ms extra latency, which is negligible for voice chat.
+- **Default to RNNoise**: lowest latency (~20 ms), best when responsiveness matters.
+- **Apple Voice Isolation** measured both stronger and cheaper (~4% vs ~6% CPU); it costs ~56 ms extra latency. Prefer it in noisy places or when you want the Mac to run cooler.
+
+### Measured performance (M5 Pro, USB stream, window open)
+
+| Denoise mode | CPU (share of one core) | Extra latency |
+| --- | --- | --- |
+| Off | 0.7% | 0 |
+| RNNoise | 5.9% | ~20 ms |
+| Apple Voice Isolation | 4.3% | ~56 ms |
+
+> Figures include the whole pipeline (receive, Opus decode, denoise, meter, AUHAL output). Hiding the window changes nothing measurable, so the UI itself costs almost no CPU.
 - **Strength slider**: 100% is full denoise. Drop to 60–80% if voices sound muffled or over-processed.
 - **Don't stack denoisers**: with MacMic denoising on, set the built-in noise suppression in Zoom / Teams / WeChat to low or off. Two denoisers in series tend to sound "underwater" and clip word endings.
 - **Try the phone-side source mode first**: WO Mic exposes several input modes on the phone; mode 3 is documented as suited to noisy environments.
