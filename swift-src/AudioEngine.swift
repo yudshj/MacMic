@@ -35,13 +35,16 @@ public final class VoiceDSPProcessor {
         eq_x1_R = 0; eq_x2_R = 0; eq_y1_R = 0; eq_y2_R = 0
     }
 
-    public func process(stereoBuffer: UnsafeMutablePointer<Int16>, sampleCount: Int, userGain: Float, isMuted: Bool) -> (peak: Float, rms: Float) {
+    /// Processes interleaved stereo Int16 `input` into interleaved Float32 `output` (±1).
+    /// The result is still quantised to Int16 first, exactly as when Int16 was handed to the
+    /// output (AudioQueue → device float), so the DSP sound is unchanged.
+    public func process(stereoInput: UnsafePointer<Int16>, output: UnsafeMutablePointer<Float>, sampleCount: Int,
+                        userGain: Float, isMuted: Bool) -> (peak: Float, rms: Float) {
         if isMuted {
-            for i in 0..<sampleCount {
-                stereoBuffer[i] = 0
-            }
+            output.update(repeating: 0, count: sampleCount)
             return (0.0, 0.0)
         }
+        let stereoBuffer = stereoInput
 
         let effectiveGain = userGain * baselineCalibration
         var outSumSquares: Float = 0.0
@@ -75,8 +78,8 @@ public final class VoiceDSPProcessor {
 
             let outValL = max(-32768.0, min(32767.0, sL * 32767.0))
             let outValR = max(-32768.0, min(32767.0, sR * 32767.0))
-            stereoBuffer[i] = Int16(outValL)
-            stereoBuffer[i + 1] = Int16(outValR)
+            output[i] = Float(Int16(outValL)) * (1.0 / 32768.0)
+            output[i + 1] = Float(Int16(outValR)) * (1.0 / 32768.0)
 
             let mag = max(abs(sL), abs(sR))
             if mag > maxPeak { maxPeak = mag }
@@ -114,17 +117,25 @@ public final class AudioEngine: ObservableObject {
     /// Speech denoiser applied to the mono phone stream before it is queued for playback.
     public let denoiser = DenoiseProcessor()
 
-    private var audioQueue: AudioQueueRef?
-    private var buffers: [AudioQueueBufferRef] = []
-    private let bufferCount = 4
-    // 20ms at 48000Hz Stereo (2 ch * 2 bytes * 960 frames = 3840 bytes)
-    private let bufferSize: UInt32 = 960 * 2 * 2
+    /// AUHAL output unit (kAudioUnitSubType_HALOutput) bound to the output device.
+    /// Replaces the old 4 x 960-frame Int16 AudioQueue: one render callback per HAL IO cycle on
+    /// the device IOThread, no AQ client/converter threads, no extra 60-80 ms of queued buffers.
+    private var outputUnit: AudioUnit?
+    /// Requested HAL IO buffer size (20 ms). Per-process on the HAL device, so other clients
+    /// of BlackHole are not affected. One wakeup per 20 ms instead of AudioQueue's ~300 ctx switches/s.
+    private let ioBufferFrames: UInt32 = 960
+    /// Largest render slice we prepare scratch space for.
+    private static let maxRenderFrames = 4096
+    /// Render-thread scratch: interleaved stereo Int16 read from the ring.
+    private let renderScratch = UnsafeMutablePointer<Int16>.allocate(capacity: AudioEngine.maxRenderFrames * 2)
     private var isRunning = false
     private var lastVUUpdate: CFTimeInterval = 0
     // Meter ballistics state (audio thread only)
     private var meterLevelDB: Float = -100
     private var meterPeakDB: Float = -100
     private var meterPeakHoldUntil: CFTimeInterval = 0
+    /// Last published meter values, quantised (audio thread only).
+    private var lastPublishedKey: (Float, Float) = (-1, -1)
 
     // Jitter buffer: preallocated ring of interleaved stereo Int16 frames.
     // Writer = network/decoder worker thread, reader = AudioQueue callback.
@@ -142,7 +153,11 @@ public final class AudioEngine: ObservableObject {
     private var stereoScratch: [Int16] = []
 
     public var currentDevice: AudioDevice?
-    public var ringStats: (underruns: Int, trims: Int, buffered: Int) { (ring.underruns, ring.trims, ring.bufferedFrames) }
+
+    /// Jitter-buffer diagnostics (underruns, trims, frames currently buffered).
+    public var ringStats: (underruns: Int, trims: Int, buffered: Int) {
+        (ring.underruns, ring.trims, ring.bufferedFrames)
+    }
 
     public init() {
         self.currentDevice = AudioDeviceManager.getDefaultDevice()
@@ -150,9 +165,10 @@ public final class AudioEngine: ObservableObject {
 
     deinit {
         stopSync()
+        renderScratch.deallocate()
     }
 
-    /// AudioQueue start/stop talk to coreaudiod synchronously and can block indefinitely if a
+    /// Output unit start/stop talk to coreaudiod synchronously and can block indefinitely if a
     /// HAL driver wedges (observed with BlackHole: AudioQueueStart never returned). They run on
     /// this queue so the UI never freezes; `start` reports a hang through its completion.
     private let controlQueue = DispatchQueue(label: "com.macmic.audio.control", qos: .userInitiated)
@@ -177,6 +193,9 @@ public final class AudioEngine: ObservableObject {
     public func stop() {
         controlQueue.async { [weak self] in self?.stopSync() }
     }
+
+    /// Stops and disposes the output unit, waiting at most `timeout` (a wedged HAL must not
+    /// block process exit). Used on quit / SIGTERM so the HAL client never dies mid-IO.
     @discardableResult
     public func stopAndWait(timeout: TimeInterval) -> Bool {
         let done = DispatchSemaphore(value: 0)
@@ -203,64 +222,32 @@ public final class AudioEngine: ObservableObject {
             }
         }
 
-        var format = AudioStreamBasicDescription(
-            mSampleRate: 48000.0,
-            mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
-            mBytesPerPacket: 4,
-            mFramesPerPacket: 1,
-            mBytesPerFrame: 4,
-            mChannelsPerFrame: 2, // Stereo for full BlackHole and macOS compatibility
-            mBitsPerChannel: 16,
-            mReserved: 0
-        )
-
-        let callback: AudioQueueOutputCallback = { userData, queue, buffer in
-            guard let userData = userData else { return }
-            let engine = Unmanaged<AudioEngine>.fromOpaque(userData).takeUnretainedValue()
-            engine.handleAudioQueueOutput(queue: queue, buffer: buffer)
-        }
-
-        let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        let status = AudioQueueNewOutput(&format, callback, selfPtr, nil, nil, 0, &audioQueue)
-
-        guard status == noErr, let queue = audioQueue else {
+        guard let unit = Self.makeOutputUnit(deviceUID: currentDevice?.uid, ioFrames: ioBufferFrames,
+                                             refCon: Unmanaged.passUnretained(self).toOpaque()) else {
             return
         }
-
-        if let dev = self.currentDevice, !dev.uid.isEmpty {
-            var uidCF = dev.uid as CFString
-            _ = withUnsafePointer(to: &uidCF) { ptr in
-                AudioQueueSetProperty(queue, kAudioQueueProperty_CurrentDevice, ptr, UInt32(MemoryLayout<CFString>.size))
-            }
-        }
-
-        buffers.removeAll()
-        for _ in 0..<bufferCount {
-            var buffer: AudioQueueBufferRef?
-            AudioQueueAllocateBuffer(queue, bufferSize, &buffer)
-            if let buf = buffer {
-                buf.pointee.mAudioDataByteSize = bufferSize
-                memset(buf.pointee.mAudioData, 0, Int(bufferSize))
-                AudioQueueEnqueueBuffer(queue, buf, 0, nil)
-                buffers.append(buf)
-            }
-        }
-
-        AudioQueueStart(queue, nil)
+        outputUnit = unit
         isRunning = true
+        // Can block if the HAL driver is wedged; `start` reports that through its watchdog.
+        if AudioOutputUnitStart(unit) != noErr {
+            isRunning = false
+            AudioUnitUninitialize(unit)
+            AudioComponentInstanceDispose(unit)
+            outputUnit = nil
+        }
     }
 
     private func stopSync() {
         isRunning = false
-        if let queue = audioQueue {
-            AudioQueueStop(queue, true)
-            AudioQueueDispose(queue, true)
-            audioQueue = nil
+        if let unit = outputUnit {
+            AudioOutputUnitStop(unit)
+            AudioUnitUninitialize(unit)
+            AudioComponentInstanceDispose(unit)
+            outputUnit = nil
         }
-        buffers.removeAll()
         ring.reset(primeFrames: primeFrames)
         meterLevelDB = -100; meterPeakDB = -100
+        lastPublishedKey = (-1, -1)
         DispatchQueue.main.async {
             self.vuLevel = 0.0
             self.vuPeak = 0.0
@@ -298,38 +285,86 @@ public final class AudioEngine: ObservableObject {
         }
     }
 
-    private func handleAudioQueueOutput(queue: AudioQueueRef, buffer: AudioQueueBufferRef) {
-        guard isRunning else {
-            buffer.pointee.mAudioDataByteSize = bufferSize
-            memset(buffer.pointee.mAudioData, 0, Int(bufferSize))
-            AudioQueueEnqueueBuffer(queue, buffer, 0, nil)
+    /// HAL IO thread: fill `frames` of interleaved stereo Float32.
+    fileprivate func render(frames: Int, into out: UnsafeMutablePointer<Float>) {
+        guard isRunning, frames <= Self.maxRenderFrames else {
+            out.update(repeating: 0, count: frames * 2)
             return
         }
-
-        let framesWanted = Int(bufferSize) / 4
-        let dest = buffer.pointee.mAudioData.assumingMemoryBound(to: Int16.self)
         // Reads whatever is available (0 while priming), zero-fills the rest.
-        let framesRead = ring.read(dest, frames: framesWanted, primeFrames: primeFrames)
-        let filledBytes = framesRead * 4
-
-        if filledBytes < Int(bufferSize) {
-            memset(buffer.pointee.mAudioData.advanced(by: filledBytes), 0, Int(bufferSize) - filledBytes)
+        let framesRead = ring.read(renderScratch, frames: frames, primeFrames: primeFrames)
+        if framesRead < frames {
+            (renderScratch + framesRead * 2).update(repeating: 0, count: (frames - framesRead) * 2)
         }
-        buffer.pointee.mAudioDataByteSize = bufferSize
+        // VoiceDSPProcessor (Low-Cut, Clarity EQ, Calibrated Gain, Soft Limiter) → Float32 output.
+        let (peak, rms) = dsp.process(stereoInput: renderScratch, output: out, sampleCount: frames * 2,
+                                      userGain: gain, isMuted: isMuted)
+        updateMeter(peak: peak, rms: rms, bufferSeconds: Float(frames) / 48000)
+    }
 
-        // Apply VoiceDSPProcessor (Low-Cut, Clarity EQ, Calibrated Gain, Soft Limiter)
-        let samples = buffer.pointee.mAudioData.assumingMemoryBound(to: Int16.self)
-        let totalSamples = Int(bufferSize) / MemoryLayout<Int16>.size
+    /// Builds and initialises an AUHAL output unit on `deviceUID` (default output if nil/unknown),
+    /// fed with interleaved stereo Float32 @ 48 kHz (BlackHole's native format: no conversion).
+    private static func makeOutputUnit(deviceUID: String?, ioFrames: UInt32, refCon: UnsafeMutableRawPointer) -> AudioUnit? {
+        var desc = AudioComponentDescription(componentType: kAudioUnitType_Output, componentSubType: kAudioUnitSubType_HALOutput,
+                                             componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0)
+        guard let comp = AudioComponentFindNext(nil, &desc) else { return nil }
+        var instance: AudioUnit?
+        guard AudioComponentInstanceNew(comp, &instance) == noErr, let unit = instance else { return nil }
 
-        let (peak, rms) = dsp.process(
-            stereoBuffer: samples,
-            sampleCount: totalSamples,
-            userGain: self.gain,
-            isMuted: self.isMuted
-        )
-        updateMeter(peak: peak, rms: rms, bufferSeconds: Float(totalSamples / 2) / 48000)
+        var ok = true
+        if let uid = deviceUID, !uid.isEmpty, var dev = deviceID(forUID: uid) {
+            ok = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                      &dev, UInt32(MemoryLayout<AudioDeviceID>.size)) == noErr
+            if ok { setIOBufferFrames(dev, ioFrames) }
+        }
+        var format = AudioStreamBasicDescription(
+            mSampleRate: 48000, mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,   // interleaved
+            mBytesPerPacket: 8, mFramesPerPacket: 1, mBytesPerFrame: 8,
+            mChannelsPerFrame: 2, mBitsPerChannel: 32, mReserved: 0)
+        var maxFrames = UInt32(maxRenderFrames)
+        var callback = AURenderCallbackStruct(inputProc: { refCon, _, _, _, frames, ioData in
+            guard let ioData = ioData else { return noErr }
+            let engine = Unmanaged<AudioEngine>.fromOpaque(refCon).takeUnretainedValue()
+            let abl = UnsafeMutableAudioBufferListPointer(ioData)
+            guard let out = abl[0].mData?.assumingMemoryBound(to: Float.self) else { return noErr }
+            engine.render(frames: Int(frames), into: out)
+            return noErr
+        }, inputProcRefCon: refCon)
+        ok = ok
+            && AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0,
+                                    &format, UInt32(MemoryLayout<AudioStreamBasicDescription>.size)) == noErr
+            && AudioUnitSetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0,
+                                    &maxFrames, UInt32(MemoryLayout<UInt32>.size)) == noErr
+            && AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0,
+                                    &callback, UInt32(MemoryLayout<AURenderCallbackStruct>.size)) == noErr
+            && AudioUnitInitialize(unit) == noErr
+        guard ok else {
+            AudioComponentInstanceDispose(unit)
+            return nil
+        }
+        return unit
+    }
 
-        AudioQueueEnqueueBuffer(queue, buffer, 0, nil)
+    /// Device IDs change when coreaudiod restarts, so resolve from the persistent UID each start.
+    private static func deviceID(forUID uid: String) -> AudioDeviceID? {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+                                              mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var cfUID = uid as CFString
+        var dev = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let st = withUnsafePointer(to: &cfUID) { p in
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr,
+                                       UInt32(MemoryLayout<CFString>.size), p, &size, &dev)
+        }
+        return st == noErr && dev != kAudioObjectUnknown ? dev : nil
+    }
+
+    private static func setIOBufferFrames(_ dev: AudioDeviceID, _ frames: UInt32) {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSize,
+                                              mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var v = frames
+        _ = AudioObjectSetPropertyData(dev, &addr, 0, nil, UInt32(MemoryLayout<UInt32>.size), &v)
     }
 }
 
@@ -354,6 +389,12 @@ extension AudioEngine {
         let floor = Self.meterFloorDB
         let level = max(0, min(1, (meterLevelDB - floor) / -floor))
         let peakNorm = max(0, min(1, (meterPeakDB - floor) / -floor))
+        // Skip the main-thread hop when nothing visible changed (the UI quantises to 1/120 anyway):
+        // silence / steady levels cost no main-thread wakeups at all.
+        let q: Float = 120
+        let key = (level * q).rounded(), peakKey = (peakNorm * q).rounded()
+        guard key != lastPublishedKey.0 || peakKey != lastPublishedKey.1 else { return }
+        lastPublishedKey = (key, peakKey)
         DispatchQueue.main.async {
             self.vuLevel = level
             self.vuPeak = peakNorm
