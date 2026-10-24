@@ -191,6 +191,7 @@ public final class LocalizationManager: ObservableObject {
         "settings_launch_at_login": "开机自启动",
         "settings_hide_dock": "隐藏 Dock 图标",
 
+        "about_based_on": "基于 luanyufei/MacMic（MIT 许可）",
         "about_version": "版本",
         "about_project_url": "项目主页",
         "about_author": "作者",
@@ -286,6 +287,7 @@ public final class LocalizationManager: ObservableObject {
         "settings_launch_at_login": "開機自啟動",
         "settings_hide_dock": "隱藏 Dock 圖示",
 
+        "about_based_on": "基於 luanyufei/MacMic（MIT 授權）",
         "about_version": "版本",
         "about_project_url": "專案首頁",
         "about_author": "作者",
@@ -381,6 +383,7 @@ public final class LocalizationManager: ObservableObject {
         "settings_launch_at_login": "Launch at Login",
         "settings_hide_dock": "Hide Dock Icon",
 
+        "about_based_on": "Based on luanyufei/MacMic (MIT)",
         "about_version": "Version",
         "about_project_url": "Project URL",
         "about_author": "Author",

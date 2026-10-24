@@ -252,49 +252,60 @@ public struct SettingsView: View {
             // Info Card
             VStack(spacing: 0) {
                 SettingsRow(icon: "link", color: .blue, title: l10n.t("about_project_url")) {
-                    Button(action: {
-                        if let url = URL(string: "https://github.com/luanyufei/MacMic") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }) {
-                        HStack(spacing: 3) {
-                            Text("GitHub")
-                            Image(systemName: "arrow.up.right")
-                                .font(.system(size: 9, weight: .bold))
-                        }
-                        .font(.system(size: 12))
-                    }
-                    .buttonStyle(.link)
-                    .focusable(false)
-                    .help(l10n.t("about_open_github"))
+                    linkButton("yudshj/MacMic", url: Self.projectURL, systemImage: "arrow.up.right",
+                               help: l10n.t("about_open_github"))
                 }
 
                 rowDivider
 
                 SettingsRow(icon: "person.fill", color: .orange, title: l10n.t("about_author")) {
-                    Text("FEEFEENOON")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
+                    linkButton("@yudshj", url: Self.authorURL, systemImage: "arrow.up.right",
+                               help: Self.authorURL)
                 }
 
                 rowDivider
 
                 SettingsRow(icon: "envelope.fill", color: .teal, title: l10n.t("about_email")) {
-                    Button(action: {
-                        if let url = URL(string: "mailto:noonyjufee@gmail.com") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }) {
-                        Text("noonyjufee@gmail.com")
-                            .font(.system(size: 12))
-                            .lineLimit(1)
-                    }
-                    .buttonStyle(.link)
-                    .focusable(false)
-                    .help(l10n.t("about_send_email"))
+                    linkButton(Self.authorEmail, url: "mailto:\(Self.authorEmail)", systemImage: nil,
+                               help: l10n.t("about_send_email"))
                 }
             }
             .macMicCard(padding: 0)
+
+            // MIT attribution for the upstream project.
+            Button(action: { Self.open(Self.upstreamURL) }) {
+                Text(l10n.t("about_based_on"))
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help(Self.upstreamURL)
         }
+    }
+
+    private static let projectURL = "https://github.com/yudshj/MacMic"
+    private static let authorURL = "https://github.com/yudshj"
+    private static let authorEmail = "maghsk2017@gmail.com"
+    private static let upstreamURL = "https://github.com/luanyufei/MacMic"
+
+    private static func open(_ string: String) {
+        if let url = URL(string: string) { NSWorkspace.shared.open(url) }
+    }
+
+    private func linkButton(_ title: String, url: String, systemImage: String?, help: String) -> some View {
+        Button(action: { Self.open(url) }) {
+            HStack(spacing: 3) {
+                Text(title).lineLimit(1)
+                if let systemImage = systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 9, weight: .bold))
+                }
+            }
+            .font(.system(size: 12))
+        }
+        .buttonStyle(.link)
+        .focusable(false)
+        .help(help)
     }
 }
