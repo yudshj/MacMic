@@ -33,21 +33,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static var mainWindow: NSWindow?
     private var windowCloseObserver: NSObjectProtocol?
 
-    /// Lite mode: when the window closes, throw away its SwiftUI hosting view and the window
-    /// itself instead of keeping them resident, so a menu-bar-only app gives the memory back.
-    static var isLiteMode: Bool {
-        get { UserDefaults.standard.bool(forKey: "macmic_lite_mode") }
-        set {
-            UserDefaults.standard.set(newValue, forKey: "macmic_lite_mode")
-            (NSApp.delegate as? AppDelegate)?.applyLiteMode()
-        }
-    }
-
-    func applyLiteMode() {
-        guard let window = Self.mainWindow, !window.isVisible else { return }
-        releaseMainWindow()
-    }
-
     /// Drops the SwiftUI content view and the window so their memory can be reclaimed.
     func releaseMainWindow() {
         guard let window = Self.mainWindow else { return }
@@ -87,13 +72,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.setFrameAutosaveName("MacMicMainWindow")
             Self.mainWindow = window
 
-            if Self.isLiteMode {
-                windowCloseObserver = NotificationCenter.default.addObserver(
-                    forName: NSWindow.willCloseNotification, object: window, queue: .main
-                ) { [weak self] _ in
-                    // Let AppKit finish the close, then release the hosting view.
-                    DispatchQueue.main.async { self?.releaseMainWindow() }
-                }
+            // Closing the window hands its UI memory back (≈78 MB) instead of keeping it
+            // resident. Reopening from the menu bar rebuilds it in ~0.1 s.
+            windowCloseObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                // Let AppKit finish the close, then release the hosting view.
+                DispatchQueue.main.async { self?.releaseMainWindow() }
             }
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -176,9 +161,6 @@ enum MacMicMain {
         app.delegate = delegate
         app.setActivationPolicy(.regular)
         app.mainMenu = AppDelegate.makeMainMenu()
-        // Menu-bar-first by default: closing the window releases its UI memory (≈78 MB measured)
-        // and reopening costs ~100 ms. Users can turn it off from the menu.
-        UserDefaults.standard.register(defaults: ["macmic_lite_mode": true])
         withExtendedLifetime(delegate) { app.run() }
     }
 }

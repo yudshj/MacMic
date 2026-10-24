@@ -12,7 +12,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
     private var statusMenuItem: NSMenuItem!
     private var toggleMenuItem: NSMenuItem!
     private var openPanelMenuItem: NSMenuItem!
-    private var liteModeMenuItem: NSMenuItem!
     private var settingsMenuItem: NSMenuItem!
     private var quitMenuItem: NSMenuItem!
     private var currentStatusSymbol: String?
@@ -85,11 +84,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         settingsMenuItem.target = self
         menu.addItem(settingsMenuItem)
 
-        // 5. Lite mode (menu-bar only, releases the UI memory when the window closes)
-        liteModeMenuItem = NSMenuItem(title: "", action: #selector(toggleLiteModeClicked), keyEquivalent: "")
-        liteModeMenuItem.target = self
-        liteModeMenuItem.state = AppDelegate.isLiteMode ? .on : .off
-        menu.addItem(liteModeMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -141,9 +135,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         settingsMenuItem.title = l10n.t("menu_settings")
 
         // 5. Quit
-        liteModeMenuItem.title = l10n.t("menu_lite_mode")
-        liteModeMenuItem.state = AppDelegate.isLiteMode ? .on : .off
-
         quitMenuItem.title = l10n.t("menu_quit")
 
         // SF Symbol glyphs for a modern macOS menu look
@@ -169,12 +160,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
     @objc public func openPanelClicked() {
         AppDelegate.shared?.showMainWindow()
-    }
-
-    @objc private func toggleLiteModeClicked() {
-        AppDelegate.isLiteMode.toggle()
-        liteModeMenuItem.state = AppDelegate.isLiteMode ? .on : .off
-        updateMenuTitles()
     }
 
     @objc private func openSettingsClicked() {

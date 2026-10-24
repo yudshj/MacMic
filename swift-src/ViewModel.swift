@@ -324,7 +324,8 @@ public final class MeterModel: ObservableObject {
 
     private func refreshVisibility() {
         let visible = NSApp.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) && !($0 is NSPanel) }
-        // In lite mode with no window at all there is nothing to draw: skip meter work entirely.
+        // With no window at all (closed; its UI is released) there is nothing to draw:
+        // skip meter work entirely so the audio thread does not wake the main thread.
         if !visible && AppDelegate.mainWindow == nil {
             if isVisible { isVisible = false; reading = MeterReading(level: 0, peak: 0); readoutDB = nil }
             return

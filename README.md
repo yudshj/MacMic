@@ -113,17 +113,18 @@ Or download the installer from the [BlackHole Website](https://existential.audio
 
 ---
 
-## Lite Mode (on by default)
+## Closing the Window
 
-Closing the main window keeps MacMic running in the menu bar and **releases the UI memory**:
+MacMic is a menu-bar app. Closing the main window keeps everything running (mic, denoise
+and audio routing are unaffected) and **automatically releases the memory used by the window UI**:
 
 | State | Memory (Activity Monitor footprint) |
 | --- | --- |
 | Window open | ~144 MB |
-| Window closed, Lite Mode on | ~67 MB |
-| Window closed, Lite Mode off | ~145 MB |
+| Window closed | ~67 MB |
 
-Reopening takes about 0.1 s. Uncheck "Lite Mode" in the menu bar menu to keep the window resident instead.
+Reopening from "Open Panel" in the menu bar takes about 0.1 s, with all state preserved
+(transport, denoise settings). There is no toggle; this is simply how close behaves.
 
 ---
 
