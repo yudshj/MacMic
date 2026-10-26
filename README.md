@@ -13,7 +13,7 @@ Language: **English** | [简体中文](README_ZH.md)
 > **Disclaimer & Note to WO Mic Developers**  
 > 1. **Unofficial Port**: This project is an independent open-source port and has no affiliation, sponsorship, or endorsement from Wolicheng Tech. **Please DO NOT ask the developers of WO Mic for help regarding this unofficial port.**  
 > 2. **To Developers of WO Mic**: We deeply appreciate Wolicheng Tech's work on WO Mic. This software is created solely for macOS interoperability research and personal convenience. If Wolicheng Tech does not approve of this port or has any concerns, please contact `maghsk2017@gmail.com`. The repository will be immediately taken down upon request.  
-> 3. **Trademarks**: All trademarks, brand names, and protocol copyrights related to WO Mic belong to Wolicheng Tech.
+> 3. **Trademarks**: WO Mic is a trademark of its respective owner. This project is not affiliated with, endorsed or sponsored by Wolicheng Tech / WO Mic.
 
 
 ---
@@ -113,6 +113,28 @@ Or download the installer from the [BlackHole Website](https://existential.audio
 
 ---
 
+## Wi-Fi connection / handshake 0x65 failed
+
+1. **Check the phone first:** WO Mic must show **Waiting for connection**. If it shows **Connected** with no working client, tap the top-right **Stop → Start** button. WO Mic accepts one client; a failed/abandoned handshake can leave that slot occupied. Disconnect other clients before trying again.
+2. Keep WO Mic **in the foreground and the phone screen awake** during diagnosis. Confirm the phone is actually connected to Wi-Fi and use its current LAN IP, not a mobile-data or personal-hotspot interface address. The Mac must be on a reachable LAN. Poor signal, roaming and packet loss can exceed a 4-second handshake timeout even when occasional pings succeed.
+3. A **TCP connect timeout** indicates a reachability/listener problem; **0 bytes / EOF** means the peer closed the connection (possibly an occupied client slot); a **0x65 read timeout** means TCP connected but no complete protocol response arrived. None alone proves Android sleep/APF filtering. Reset WO Mic before another attempt; avoid repeated bare TCP probes, which themselves can occupy its slot.
+4. Wi-Fi needs **TCP 8125** to the phone and **UDP 8125** on the Mac. Another client's occupied UDP port must be released. The Python client binds UDP before advertising its actual port in 0x66, retries at most 3 times with 1s/2s backoff, and gives each complete network attempt a 5s budget by default. Cleanup attempts 0x68 then abortive TCP close; this cannot guarantee recovery of an already-stuck phone server.
+5. **USB (ADB) is the most reliable alternative on unstable Wi-Fi.** On Android select USB transport in WO Mic, tap Start, then select USB (ADB) in MacMic. For the Python reference client (with its audio dependencies installed):
+
+   ```bash
+   python3 macmic_cli.py --usb
+   ```
+
+   An audio-free Python diagnostic uses one TCP connection for both reachability and 0x65 (no audio capture):
+
+   ```bash
+   python3 macmic_cli.py --diagnose 192.168.1.105
+   # Optional: an already-created ADB forward, e.g. local 18125 → phone 8125
+   python3 macmic_cli.py --diagnose 127.0.0.1 --port 18125
+   ```
+
+   Diagnosis does not test UDP audio or 0x66/0x67. An ADB forward is a TCP proxy: a reset on the Mac side does not prove the phone-side socket received a reset. If the phone still shows Connected after diagnosis, tap Stop → Start again.
+
 ## Closing the Window
 
 MacMic is a menu-bar app. Closing the main window keeps everything running (mic, denoise
@@ -192,12 +214,16 @@ swift-src/
 
 Distributed under the [MIT License](LICENSE).
 
+The macOS app statically links [Opus](https://opus-codec.org/) (BSD-3-Clause) and [RNNoise](https://github.com/xiph/rnnoise) (BSD-3-Clause). Their license texts ship with the app in `MacMic.app/Contents/Resources/licenses/` (sources: [`licenses/`](licenses/), [`third_party/rnnoise/COPYING`](third_party/rnnoise/COPYING)).
+
+The Android phone app now lives in [MacMic-Android](https://github.com/yudshj/MacMic-Android).
+
 ## Acknowledgements
 
 - Built on [luanyufei/MacMic](https://github.com/luanyufei/MacMic) (MIT); thanks to the original author for the foundational work.
 - [xiph/rnnoise](https://github.com/xiph/rnnoise) — BSD-3-Clause noise suppression model.
 - [ExistentialAudio/BlackHole](https://github.com/ExistentialAudio/BlackHole) — virtual audio driver.
-- WO Mic trademarks and protocol rights belong to Wolicheng Tech.
+- WO Mic is a trademark of its respective owner. This project is not affiliated with, endorsed or sponsored by Wolicheng Tech / WO Mic.
 
 ## Maintainer
 

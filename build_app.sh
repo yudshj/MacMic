@@ -60,6 +60,18 @@ chmod +x "$MACOS/MacMic"
 # 4. Copy Icon
 cp AppIcon.icns "$RESOURCES/"
 
+# 4b. Bundle third-party licence texts (BSD-3 requires them with binary redistribution).
+# Opus: prefer the COPYING of the Homebrew build we link against; fall back to the copy in licenses/.
+LICENSES_DIR="$RESOURCES/licenses"
+mkdir -p "$LICENSES_DIR"
+OPUS_COPYING="$(brew --prefix opus 2>/dev/null)/COPYING"
+if [[ ! -f "$OPUS_COPYING" ]]; then
+    OPUS_COPYING="licenses/opus-COPYING.txt"
+fi
+cp "$OPUS_COPYING" "$LICENSES_DIR/opus-COPYING.txt"
+cp third_party/rnnoise/COPYING "$LICENSES_DIR/rnnoise-COPYING.txt"
+echo "📄 Bundled licences: $(ls "$LICENSES_DIR" | tr '\n' ' ')"
+
 # 5. Generate Info.plist
 cat << 'PLIST' > "$CONTENTS/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>

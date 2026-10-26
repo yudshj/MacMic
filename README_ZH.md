@@ -14,7 +14,7 @@
 >
 > 1. **非官方移植**：本项目为独立开发的非官方开源移植版本，与 WO Mic 官方团队 Wolicheng Tech 没有任何从属、赞助或商业关联。**请勿因本项目的任何使用或兼容性问题向 WO Mic 官方开发者寻求帮助。**  
 > 2. **致 WO Mic 官方开发者**：衷心感谢并高度赞赏 Wolicheng Tech 创作的优秀软件 WO Mic。本项目仅出于 macOS 协议互操作性技术研究与个人学习便利而开源。如果官方团队不认可此移植行为或认为有任何不妥，请随时联系作者邮箱 `maghsk2017@gmail.com`，收到反馈后将第一时间停止公开此仓库并关停相关下载。  
-> 3. **版权说明**：WO Mic 相关商标及协议版权均归原作者 Wolicheng Tech 所有。请勿将本项目用于任何商业变现或侵权用途。
+> 3. **商标说明**：「WO Mic」是其各自权利人的商标；本项目与 Wolicheng Tech / WO Mic 无任何隶属、背书或赞助关系。请勿将本项目用于任何商业变现或侵权用途。
 
 ---
 
@@ -114,6 +114,28 @@ brew install blackhole-2ch
 
 ---
 
+## Wi-Fi 模式连不上 / 握手 0x65 失败
+
+1. **先看手机：** WO Mic 必须显示 **「等待连接…」**。没有可用客户端却显示「已连接」时，点右上角 **停止 → 开始**。WO Mic 是单客户端服务，未完成的握手可能留下占用的会话；重试前先断开其它客户端。
+2. 排查时保持 **WO Mic 在前台、手机屏幕常亮**。确认手机确实已连接 Wi-Fi，使用当前局域网 IP，不要误用移动数据或个人热点接口地址，Mac 也应在可达的局域网内。**信号差、漫游、丢包可能导致握手 4 秒超时**，偶尔 ping 通不能排除网络问题。
+3. **TCP connect 超时** 表示可达性或监听问题；**收到 0 字节 / EOF** 表示对端关闭（可能已有客户端占用）；**0x65 读取超时** 表示 TCP 已连接但未收到完整协议回复。单独一项不足以证明 Android 休眠/APF 过滤。先复位 WO Mic，再重试；不要反复裸 TCP 探测，这本身也可能占用单客户端会话。
+4. Wi-Fi 使用手机 **TCP 8125** 控制通道和 Mac 本机 **UDP 8125** 音频端口。若本机 UDP 端口被其它客户端占用，先断开它。Python 客户端会在 0x66 申报真实媒体端口前绑定 UDP，最多尝试 3 次、间隔 1/2 秒，默认每次整个网络连接阶段预算 5 秒。清理时尽力发送 0x68 后强制 TCP RST 关闭，但无法保证已卡住的手机服务一定恢复。
+5. **Wi-Fi 不稳时，用 USB (ADB) 模式最稳。** Android WO Mic 选择 USB 连接方式并点击开始，MacMic 选择 USB (ADB)。Python 参考客户端（已安装音频依赖）可运行：
+
+   ```bash
+   python3 macmic_cli.py --usb
+   ```
+
+   无需音频依赖的 Python 诊断命令（同一 TCP 会话检查可达性与 0x65，不启动采音）：
+
+   ```bash
+   python3 macmic_cli.py --diagnose 192.168.1.105
+   # 可选：已经建立了本机 18125 → 手机 8125 的 ADB 转发时
+   python3 macmic_cli.py --diagnose 127.0.0.1 --port 18125
+   ```
+
+   诊断不验证 UDP 音频和 0x66/0x67。ADB 转发是 TCP 代理，Mac 侧 RST 不代表手机侧一定收到 RST。诊断后手机若仍显示「已连接」，再点停止 → 开始。
+
 ## 关闭窗口后的行为
 
 MacMic 是菜单栏常驻应用。关闭主窗口后程序继续工作（麦克风、降噪、路由都不受影响），同时**自动释放窗口界面占用的内存**：
@@ -196,12 +218,16 @@ scripts/
 
 本项目采用 [MIT 许可证](LICENSE) 开源。
 
+macOS App 静态链接了 [Opus](https://opus-codec.org/)（BSD-3-Clause）与 [RNNoise](https://github.com/xiph/rnnoise)（BSD-3-Clause），其许可证文本随 App 一起分发，位于 `MacMic.app/Contents/Resources/licenses/`（源文件见 [`licenses/`](licenses/) 与 [`third_party/rnnoise/COPYING`](third_party/rnnoise/COPYING)）。
+
+Android 手机端 App 现已迁移到独立仓库 [MacMic-Android](https://github.com/yudshj/MacMic-Android)。
+
 ## 致谢
 
 - 本项目基于 [luanyufei/MacMic](https://github.com/luanyufei/MacMic)（MIT）继续开发，感谢原作者的开创性工作。
 - [xiph/rnnoise](https://github.com/xiph/rnnoise)：BSD-3-Clause 许可的降噪模型。
 - [ExistentialAudio/BlackHole](https://github.com/ExistentialAudio/BlackHole)：虚拟音频驱动。
-- WO Mic 相关商标与协议版权归 Wolicheng Tech 所有。
+- 「WO Mic」是其各自权利人的商标；本项目与 Wolicheng Tech / WO Mic 无任何隶属、背书或赞助关系。
 
 ## 维护者
 
