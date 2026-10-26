@@ -1,103 +1,111 @@
-"""
-MacMic CLI Client for macOS (Apple Silicon arm64).
-Usage:
-    python3 macmic_cli.py --wifi 192.168.1.100
-    python3 macmic_cli.py --usb
-    python3 macmic_cli.py --list-devices
-"""
+"""MacMic CLI: Wi-Fi/USB streaming or bounded, audio-free diagnosis."""
 
 import argparse
+import ipaddress
+import subprocess
 import sys
 import time
-import signal
-from macmic_protocol import MacMicClient, ConnectionState
-from macmic_audio import AudioOutputEngine
+
+from macmic_protocol import MacMicClient, ConnectionState, RECOVERY_HINT
 from macmic_adb import ADBManager
+
+
+def diagnose(host, port=8125, timeout=5.0):
+    """One TCP session does both reachability and 0x65; no naked TCP probe."""
+    try:
+        ipaddress.IPv4Address(host)
+    except ValueError:
+        print("Diagnosis requires an IPv4 address, not a hostname.")
+        return 2
+    print("Before diagnosis: WO Mic must show Waiting for connection (等待连接).")
+    print("This briefly occupies its single client slot; it does not start audio capture.")
+    try:
+        result = subprocess.run(["ping", "-n", "-c", "2", host],
+                                capture_output=True, text=True, timeout=4)
+        print("[Ping] " + ("reachable" if result.returncode == 0 else "no reply (ICMP may be blocked)"))
+        print(result.stdout.strip())
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[Ping] inconclusive: {exc}")
+    client = MacMicClient(host=host, control_port=port,
+                          on_state_change=lambda state, detail: print(f"[{state}] {detail}"))
+    try:
+        if client.connect(timeout=timeout, attempts=1, handshake_only=True):
+            print("[TCP + 0x65] OK. UDP audio/0x66/0x67 have NOT been tested.")
+            return 0
+        print("[TCP + 0x65] failed. " + RECOVERY_HINT)
+        return 1
+    finally:
+        client.disconnect()
+        print("Stop + abortive close sent best-effort. If the phone stays Connected, tap Stop → Start.")
 
 
 def main():
     parser = argparse.ArgumentParser(description="WO Mic Client for macOS (Apple Silicon)")
-    parser.add_argument("--wifi", type=str, metavar="IP", help="Connect via Wi-Fi with phone IP (e.g. 192.168.1.100)")
-    parser.add_argument("--usb", action="store_true", help="Connect via USB cable (ADB)")
-    parser.add_argument("--wifidirect", type=str, default="192.168.49.1", metavar="IP", nargs="?", help="Connect via Wi-Fi Direct (default 192.168.49.1)")
-    parser.add_argument("--device", type=int, default=None, help="Audio output device ID (run --list-devices to see)")
-    parser.add_argument("--gain", type=float, default=1.0, help="Volume gain multiplier (1.0 = 100%)")
-    parser.add_argument("--list-devices", action="store_true", help="List available audio output devices")
-
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--wifi", metavar="IP", help="Connect via Wi-Fi")
+    modes.add_argument("--usb", action="store_true", help="Connect via USB cable (ADB)")
+    modes.add_argument("--wifidirect", const="192.168.49.1", metavar="IP", nargs="?",
+                       help="Connect via Wi-Fi Direct (default 192.168.49.1)")
+    modes.add_argument("--diagnose", metavar="IP", help="Check ping/TCP/0x65 without audio capture")
+    parser.add_argument("--port", type=int, default=8125, help="Control service port (default 8125)")
+    parser.add_argument("--timeout", type=float, default=5.0, help="Whole connection attempt budget, 0..30s (default 5)")
+    parser.add_argument("--device", type=int, default=None, help="Audio output device ID")
+    parser.add_argument("--gain", type=float, default=1.0, help="Volume gain multiplier")
+    parser.add_argument("--list-devices", action="store_true", help="List output audio devices")
     args = parser.parse_args()
-
-    if args.list_devices:
-        print("=== Available Output Audio Devices on macOS ===")
-        devs = AudioOutputEngine.get_output_devices()
-        for d in devs:
-            flag = " [RECOMMENDED VIRTUAL MIC]" if d["is_blackhole"] else ""
-            print(f"  ID {d["id"]}: {d["name"]} ({d["channels"]}ch, {d["default_samplerate"]}Hz){flag}")
-        return
-
-    host = None
-    is_tcp = False
-
-    if args.usb:
-        print("🔍 Checking connected Android devices via ADB...")
-        devices = ADBManager.list_devices()
-        if not devices:
-            print("❌ No ADB devices detected! Please ensure USB Debugging is ON and cable is connected.")
-            sys.exit(1)
-        print(f"✅ Found device: {devices[0]["serial"]}")
-        print("🔌 Forwarding port tcp:8125...")
-        if not ADBManager.forward_port(8125, 8125):
-            print("❌ Failed to forward ADB port!")
-            sys.exit(1)
-        host = "127.0.0.1"
-        is_tcp = True
-    elif args.wifi:
-        host = args.wifi
-        is_tcp = False
-    elif args.wifidirect:
-        host = args.wifidirect
-        is_tcp = False
-    else:
+    if not 1 <= args.port <= 65535 or not 0 < args.timeout <= 30:
+        parser.error("port must be 1..65535; timeout must be >0 and <=30 seconds")
+    if args.diagnose:
+        return diagnose(args.diagnose, args.port, args.timeout)
+    if not (args.list_devices or args.usb or args.wifi or args.wifidirect):
         parser.print_help()
-        sys.exit(0)
-
-    print("🎧 Initializing CoreAudio Output Engine...")
-    audio = AudioOutputEngine(sample_rate=48000, channels=1)
-    audio.set_gain(args.gain)
-    audio.start(args.device)
-    print(f"🔊 Audio routed to: {audio.device_name} (Gain: {int(args.gain * 100)}%)")
-
-    def on_state(state, detail):
-        print(f"[{state}] {detail}")
-
-    client = MacMicClient(
-        host=host,
-        control_port=8125,
-        media_port=8125,
-        is_tcp_media=is_tcp,
-        audio_engine=audio,
-        on_state_change=on_state
-    )
-
-    def handle_sigint(sig, frame):
-        print("\n🛑 Stopping WO Mic client...")
-        client.disconnect()
-        audio.stop()
-        if is_tcp:
-            ADBManager.remove_forward(8125)
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, handle_sigint)
-
-    print(f"🚀 Connecting to WO Mic server at {host}:8125...")
-    success = client.connect()
-    if not success:
-        print("❌ Connection failed.")
-        sys.exit(1)
-
-    print("🎙️ WO Mic is STREAMING! Speak into your phone. Press Ctrl+C to stop.")
-    while True:
-        time.sleep(1)
+        return 0
+    from macmic_audio import AudioOutputEngine
+    if args.list_devices:
+        for dev in AudioOutputEngine.get_output_devices():
+            flag = " [VIRTUAL MIC]" if dev["is_blackhole"] else ""
+            print(f"ID {dev['id']}: {dev['name']} ({dev['channels']}ch, {dev['default_samplerate']}Hz){flag}")
+        return 0
+    serial = None
+    forwarded = False
+    client = None
+    audio = None
+    try:
+        if args.usb:
+            devices = [d for d in ADBManager.list_devices() if d["state"] == "device"]
+            if not devices:
+                print("No authorized ADB device. Connect USB and allow USB debugging on the phone.")
+                return 1
+            serial = devices[0]["serial"]
+            forwarded = ADBManager.forward_port(args.port, 8125, serial=serial)
+            if not forwarded:
+                print("Could not create ADB forwarding. Check whether the local port is occupied.")
+                return 1
+        host = "127.0.0.1" if args.usb else (args.wifi or args.wifidirect)
+        audio = AudioOutputEngine(sample_rate=48000, channels=1)
+        audio.set_gain(args.gain)
+        audio.device_index = args.device
+        client = MacMicClient(host=host, control_port=args.port,
+                              media_port=args.port if args.usb else 8125,
+                              is_tcp_media=args.usb, audio_engine=audio,
+                              on_state_change=lambda state, detail: print(f"[{state}] {detail}"))
+        if not client.connect(timeout=args.timeout):
+            return 1
+        print("WO Mic is streaming. Press Ctrl+C to stop.")
+        while client.state == ConnectionState.STREAMING:
+            time.sleep(0.2)
+        return 1 if client.state == ConnectionState.ERROR else 0
+    except KeyboardInterrupt:
+        print("\nStopping WO Mic client...")
+        return 0
+    finally:
+        if client:
+            client.disconnect()
+        if audio:
+            audio.stop()
+        if forwarded:
+            ADBManager.remove_forward(args.port, serial=serial)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

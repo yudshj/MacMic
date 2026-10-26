@@ -55,7 +55,8 @@ class ADBManager:
         cmd = [adb]
         if serial:
             cmd.extend(["-s", serial])
-        cmd.extend(["forward", f"tcp:{local_port}", f"tcp:{remote_port}"])
+        # Never replace another running client's forwarding rule.
+        cmd.extend(["forward", "--no-rebind", f"tcp:{local_port}", f"tcp:{remote_port}"])
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             return res.returncode == 0
